@@ -1,7 +1,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 
-// Initialize bot with error handling
+// Initialize bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // Cache for API token
@@ -35,32 +35,45 @@ async function getAliToken() {
 }
 
 // 2. Product Search with Retries
-async function searchProducts(query) {
-  try {
-    const token = await getAliToken();
-    const response = await axios.get('https://api.alibaba.com/products/search', {
-      headers: { Authorization: `Bearer ${token}` },
-      params: {
-        keywords: query,
-        sort: 'price_asc',
-        pageSize: 3,
-        locale: 'en'
-      },
-      timeout: 8000 // 8-second timeout
-    });
+async function searchWithRetry(query, retries = 2) {
+  while (retries > 0) {
+    try {
+      const token = await getAliToken();
+      const response = await axios.get('https://api.alibaba.com/products/search', {
+        headers: { 
+          Authorization: `Bearer ${token}`,
+          'Accept-Language': 'en-US'
+        },
+        params: {
+          keywords: query,
+          sort: 'price_asc',
+          pageSize: 3,
+          locale: 'en',
+          currency: 'USD'
+        },
+        timeout: 8000 // 8-second timeout
+      });
 
-    return response.data?.data?.map(product => ({
-      id: product.productId,
-      title: product.title,
-      price: product.price?.value || 'N/A',
-      image: product.imageUrl || null,
-      rating: product.evaluation?.star || '4.5'
-    })) || [];
+      // Process results
+      const products = response.data?.data?.filter(p => 
+        p.productId && p.title
+      ).map(p => ({
+        id: p.productId,
+        title: p.title?.trim() || 'No Title',
+        price: p.price?.formattedPrice || 'N/A',
+        image: p.imageUrl || null,
+        rating: p.evaluation?.star || '4.0'
+      })) || [];
 
-  } catch (error) {
-    console.error('Search Error:', error.response?.data || error.message);
-    return [];
+      if (products.length > 0) return products;
+      
+    } catch (error) {
+      console.error(`Attempt ${3-retries} failed:`, error.message);
+    }
+    retries--;
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
+  return [];
 }
 
 // 3. Generate Affiliate Link
@@ -68,48 +81,73 @@ function createAffLink(productId) {
   return `https://s.click.aliexpress.com/deeplink?id=${process.env.AFFILIATE_ID}&url=/item/${productId}.html`;
 }
 
-// 4. Bot Commands
+// 4. API Test Command
+bot.command('testapi', async (ctx) => {
+  try {
+    const token = await getAliToken();
+    await ctx.reply(`✅ API connection working! Token: ${token.slice(0, 15)}...`);
+    
+    const testProducts = await searchWithRetry("smart watch");
+    await ctx.reply(`📦 Found ${testProducts.length} products`);
+    
+    if (testProducts.length > 0) {
+      await ctx.reply(`First result: ${testProducts[0].title}\nPrice: ${testProducts[0].price}`);
+    }
+  } catch (e) {
+    await ctx.reply(`❌ API test failed: ${e.message}`);
+    console.error('API Test Error:', e);
+  }
+});
+
+// 5. Start Command
 bot.start((ctx) => {
   ctx.replyWithMarkdown(
     `🛒 *AliExpress Price Bot* 🔍\n\n` +
-    `Send me a product name like:\n` +
-    `• "smart watch"\n` +
-    `• "wireless earbuds"\n` +
-    `• "LED strip lights"`
+    `Send me any product name like:\n` +
+    `• Smart watch\n` +
+    `• Wireless earbuds\n` +
+    `• LED strip lights\n\n` +
+    `Try /testapi to check connection`
   );
 });
 
+// 6. Product Search Handler
 bot.on('text', async (ctx) => {
   try {
+    await ctx.sendChatAction('typing');
     const query = ctx.message.text.trim();
     
-    // Show typing indicator
-    await ctx.sendChatAction('typing');
+    if (query.startsWith('/')) return; // Ignore commands
     
-    const products = await searchProducts(query);
+    const products = await searchWithRetry(query);
     
     if (products.length === 0) {
-      return ctx.reply('⚠️ No products found. Try different keywords or check back later.');
+      return ctx.replyWithMarkdown(
+        `🔍 No products found for *"${query}"*\n\n` +
+        `Try:\n` +
+        `- Different keywords\n` +
+        `- English terms\n` +
+        `- More common product names\n\n` +
+        `Example: "bluetooth headphones"`
+      );
     }
 
-    // Send each product as separate message
-    for (const product of products.slice(0, 3)) { // Limit to 3 results
+    // Send products (max 3)
+    for (const product of products.slice(0, 3)) {
       const buttons = Markup.inlineKeyboard([
         Markup.button.url('🛒 Buy Now', createAffLink(product.id))
       ]);
 
       const caption = `🎯 *${product.title}*\n` +
-                     `💰 Price: $${product.price}\n` +
-                     `⭐ Rating: ${product.rating}/5\n` +
-                     `🔗 [View Product](${createAffLink(product.id)})`;
+                     `💰 Price: ${product.price}\n` +
+                     `⭐ Rating: ${product.rating}/5`;
 
       try {
         if (product.image) {
-          await ctx.replyWithPhoto({ url: product.image }, { 
-            caption, 
-            parse_mode: 'Markdown', 
-            ...buttons 
-          });
+          await ctx.replyWithPhoto(
+            { url: product.image },
+            { caption, parse_mode: 'Markdown', ...buttons }
+          );
         } else {
           await ctx.replyWithMarkdown(caption, buttons);
         }
@@ -121,19 +159,19 @@ bot.on('text', async (ctx) => {
 
   } catch (error) {
     console.error('Handler Error:', error);
-    ctx.reply('❌ Service temporarily unavailable. Please try again later.');
+    ctx.reply('⚠️ Service temporarily unavailable. Please try again later.');
   }
 });
 
-// 5. Vercel Serverless Handler
+// 7. Error Handling
+bot.catch((err) => {
+  console.error('Bot Error:', err);
+});
+
+// 8. Vercel Serverless Handler
 module.exports = async (req, res) => {
   try {
     if (req.method === 'POST') {
       await bot.handleUpdate(req.body);
     }
-    res.status(200).json({ status: 'OK' });
-  } catch (e) {
-    console.error('Webhook Error:', e);
-    res.status(200).json({ status: 'Error handled' });
-  }
-};
+    res
