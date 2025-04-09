@@ -1,5 +1,17 @@
 {
   "version": 2,
-  "builds": [{ "src": "api/*.js", "use": "@vercel/node" }],
-  "routes": [{ "src": "/api/(.*)", "dest": "/api/bot.js" }]
+  "builds": [
+    {
+      "src": "api/bot.js",
+      "use": "@vercel/node",
+      "config": { "includeFiles": ["package.json"] }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/bot",
+      "dest": "/api/bot.js",
+      "methods": ["POST"]
+    }
+  ]
 }
