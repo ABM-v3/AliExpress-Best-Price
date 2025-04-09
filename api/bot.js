@@ -1,147 +1,113 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
+const cron = require('node-cron');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
+const CHANNEL_ID = process.env.CHANNEL_ID; // Your channel username (e.g., '@yourchannel')
 
-// 1. API Authentication with Token Refresh
-let apiToken = null;
-async function refreshToken() {
+// 1. AliExpress API Authentication
+async function getAliToken() {
   try {
     const response = await axios.post('https://api.alibaba.com/token', {
       client_id: process.env.ALI_APP_KEY,
       client_secret: process.env.ALI_APP_SECRET,
       grant_type: 'client_credentials'
-    }, { timeout: 5000 });
-    
-    apiToken = response.data.access_token;
-    setTimeout(refreshToken, (response.data.expires_in - 60) * 1000); // Refresh 1min before expiry
-    return apiToken;
-  } catch (e) {
-    console.error('Token refresh failed:', e.message);
-    throw e;
+    });
+    return response.data.access_token;
+  } catch (error) {
+    console.error('Auth Error:', error.response?.data || error.message);
+    throw error;
   }
 }
 
-// 2. Universal Product ID Extractor
-function extractProductId(url) {
+// 2. Fetch Daily Deals
+async function fetchDailyDeals() {
   try {
-    // Decode URL first
-    const decodedUrl = decodeURIComponent(url);
-    
-    // Pattern 1: Standard affiliate links (s.click.aliexpress.com)
-    const affiliateMatch = decodedUrl.match(/(?:item%2F|i%2F)(\d+)/) || decodedUrl.match(/id=(\d+)/);
-    if (affiliateMatch) return affiliateMatch[1];
-    
-    // Pattern 2: Direct product links
-    const directMatch = url.match(/(?:aliexpress\.com\/item\/|m\.aliexpress\.com\/i\/)(\d+)/);
-    if (directMatch) return directMatch[1];
-    
-    return null;
-  } catch (e) {
-    console.error('URL parsing error:', e);
-    return null;
-  }
-}
-
-// 3. Real Shipping API Call
-async function fetchShippingMethods(productId) {
-  try {
-    const token = apiToken || await refreshToken();
-    
-    const response = await axios.get('https://api.alibaba.com/logistics/shipping_options', {
+    const token = await getAliToken();
+    const response = await axios.get('https://api.alibaba.com/products/search', {
       headers: { Authorization: `Bearer ${token}` },
       params: {
-        product_id: productId,
-        target_currency: 'USD',
-        target_language: 'en',
-        country_code: 'US' // Change as needed
-      },
-      timeout: 10000
+        sort: 'orders_desc',
+        pageSize: 5,
+        minPrice: 1,
+        maxPrice: 50,
+        locale: 'en',
+        currency: 'USD'
+      }
     });
 
-    return response.data.data?.map(method => ({
-      name: method.shipping_company,
-      days: `${method.estimated_delivery_time_min}-${method.estimated_delivery_time_max} days`,
-      cost: method.fee ? `$${method.fee.value}` : 'Free',
-      tracking: method.tracked ? '✅' : '❌',
-      service: method.service_name
+    return response.data?.data?.map(product => ({
+      id: product.productId,
+      title: product.title,
+      price: product.price.value,
+      originalPrice: product.originalPrice?.value || product.price.value * 1.5,
+      image: product.imageUrl,
+      orders: product.tradeCount,
+      rating: product.evaluation?.star || 4.5
     })) || [];
-
   } catch (error) {
-    console.error('Shipping API Error:', {
-      status: error.response?.status,
-      data: error.response?.data,
-      message: error.message
-    });
-    throw new Error('Failed to fetch shipping data');
+    console.error('Deals Error:', error.response?.data || error.message);
+    return [];
   }
 }
 
-// 4. Bot Command Handlers
-bot.start((ctx) => {
-  ctx.replyWithMarkdown(
-    `🚢 *AliExpress Shipping Checker*\n\n` +
-    `Send me any product link:\n` +
-    `• Affiliate: \\\`https://s.click.aliexpress.com/e/_DdJwKq1\\\`\n` +
-    `• Direct: \\\`https://www.aliexpress.com/item/100500123456.html\\\`\n` +
-    `• Mobile: \\\`https://m.aliexpress.com/i/100500123456.html\\``
-  );
-});
+// 3. Generate Affiliate Link
+function generateAffLink(productId) {
+  return `https://s.click.aliexpress.com/deeplink?id=${process.env.AFFILIATE_ID}&url=/item/${productId}.html`;
+}
 
-bot.on('text', async (ctx) => {
-  const url = ctx.message.text.trim();
+// 4. Format Deal Post
+function formatDeal(product) {
+  const discount = Math.round((1 - product.price / product.originalPrice) * 100);
   
-  if (!url.includes('aliexpress.com')) {
-    return ctx.reply('❌ Please send a valid AliExpress link');
-  }
+  return `🔥 *${product.title}*\n\n` +
+         `💰 Price: $${product.price} (was $${product.originalPrice}) - ${discount}% OFF\n` +
+         `⭐ Rating: ${product.rating}/5 | 🛒 ${product.orders} orders\n` +
+         `🔗 [Buy Now](${generateAffLink(product.id)})`;
+}
 
+// 5. Post to Channel
+async function postDealsToChannel() {
   try {
-    await ctx.sendChatAction('typing');
+    const deals = await fetchDailyDeals();
     
-    // Extract product ID
-    const productId = extractProductId(url);
-    if (!productId) {
-      return ctx.replyWithMarkdown(
-        `🔍 *Invalid Link Format*\n\n` +
-        `I support:\n` +
-        `• Affiliate links (s.click.aliexpress.com)\n` +
-        `• Direct product links\n` +
-        `• Mobile links\n\n` +
-        `Example: \\\`https://www.aliexpress.com/item/100500123456.html\\``
-      );
+    for (const deal of deals) {
+      try {
+        await bot.telegram.sendPhoto(
+          CHANNEL_ID,
+          { url: deal.image },
+          {
+            caption: formatDeal(deal),
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '🛒 Buy Now', url: generateAffLink(deal.id) }
+              ]]
+            }
+          }
+        );
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Delay between posts
+      } catch (e) {
+        console.error('Failed to post:', deal.id, e.message);
+      }
     }
-
-    // Fetch real shipping data
-    const methods = await fetchShippingMethods(productId);
-    
-    if (methods.length === 0) {
-      return ctx.reply('⚠️ No shipping options available for this product');
-    }
-
-    // Format response
-    let response = `📦 *Shipping Options*\n\n`;
-    methods.forEach((m, i) => {
-      response += `${i+1}. *${m.name}* (${m.service})\n` +
-                 `   ⏱ ${m.days} | 💰 ${m.cost}\n` +
-                 `   Tracking: ${m.tracking}\n\n`;
-    });
-
-    await ctx.replyWithMarkdown(response);
-
   } catch (error) {
-    console.error('Handler Error:', error);
-    await ctx.replyWithMarkdown(
-      `⚠️ *Service Temporarily Unavailable*\n\n` +
-      `Please try:\n` +
-      `1. Sending the link again\n` +
-      `2. Using a direct product link\n` +
-      `3. Trying later\n\n` +
-      `Error: \\\`${error.message}\\\``
-    );
+    console.error('Posting Error:', error);
+  }
+}
+
+// 6. Schedule Daily Posts (9AM UTC)
+cron.schedule('0 9 * * *', postDealsToChannel);
+
+// 7. Manual Trigger Command
+bot.command('postdeals', async (ctx) => {
+  if (ctx.chat.id.toString() === CHANNEL_ID.replace('@', '')) {
+    await postDealsToChannel();
+    ctx.reply('Deals posted!');
   }
 });
 
-// Vercel handler
+// 8. Vercel Handler
 module.exports = async (req, res) => {
   try {
     if (req.method === 'POST') {
@@ -149,7 +115,10 @@ module.exports = async (req, res) => {
     }
     res.status(200).json({ status: 'OK' });
   } catch (e) {
-    console.error('Webhook Error:', e);
+    console.error('Handler Error:', e);
     res.status(200).json({ status: 'Error handled' });
   }
 };
+
+// Initial test
+postDealsToChannel();
