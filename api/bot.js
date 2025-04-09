@@ -3,114 +3,125 @@ const axios = require('axios');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// 1. AliExpress API Authentication
-let authToken = null;
-async function getAuthToken() {
-  if (authToken) return authToken;
-  
-  const response = await axios.post('https://api.alibaba.com/token', {
-    client_id: process.env.ALI_APP_KEY,
-    client_secret: process.env.ALI_APP_SECRET,
-    grant_type: 'client_credentials'
-  }, { timeout: 5000 });
-
-  authToken = response.data.access_token;
-  return authToken;
-}
-
-// 2. Product ID Extractor (Supports All Link Types)
+// 1. Enhanced Product ID Extractor
 function extractProductId(url) {
-  // Standard: https://www.aliexpress.com/item/100500123456.html
-  let match = url.match(/aliexpress\.com\/item\/(\d+)/);
-  if (match) return match[1];
-
-  // Affiliate: https://s.click.aliexpress.com/e/_DdJwKq1
-  match = url.match(/[?&]url=[^%]*%2Fitem%2F(\d+)/);
-  if (match) return match[1];
-
-  // Mobile: https://m.aliexpress.com/i/100500123456.html
-  match = url.match(/m\.aliexpress\.com\/i\/(\d+)/);
-  if (match) return match[1];
-
-  return null;
-}
-
-// 3. Real Shipping API Call
-async function getShippingMethods(productId) {
   try {
-    const token = await getAuthToken();
-    const response = await axios.get(`https://api.alibaba.com/logistics/shipping`, {
-      headers: { Authorization: `Bearer ${token}` },
-      params: {
-        productId,
-        countryCode: 'US' // Change based on user location
-      },
-      timeout: 8000
-    });
+    // Handle affiliate links by extracting final URL
+    if (url.includes('s.click.aliexpress.com')) {
+      const decoded = decodeURIComponent(url);
+      const itemMatch = decoded.match(/item%2F(\d+)\.html/);
+      if (itemMatch) return itemMatch[1];
+      
+      // Alternative pattern for some affiliate links
+      const idMatch = decoded.match(/id=(\d+)/);
+      if (idMatch) return idMatch[1];
+    }
 
-    return response.data.methods.map(method => ({
-      name: method.shippingCompany,
-      days: `${method.minDeliveryDays}-${method.maxDeliveryDays}`,
-      cost: method.fee ? `$${method.fee}` : 'Free',
-      service: method.serviceName,
-      tracking: method.hasTracking ? '✅' : '❌'
-    }));
+    // Standard and mobile links
+    const patterns = [
+      /aliexpress\.com\/item\/(\d+)/,
+      /m\.aliexpress\.com\/i\/(\d+)/
+    ];
 
-  } catch (error) {
-    console.error('Shipping API Error:', error.response?.data || error.message);
-    throw new Error('Failed to fetch shipping data');
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match) return match[1];
+    }
+
+    return null;
+  } catch (e) {
+    console.error('Extraction error:', e);
+    return null;
   }
 }
 
-// 4. Bot Commands
-bot.start((ctx) => {
-  ctx.replyWithMarkdown(
-    `🚢 *AliExpress Shipping Checker*\n\n` +
-    `Send me any product link to see *real-time shipping options*:\n\n` +
-    `• Standard: https://www.aliexpress.com/item/100500123456.html\n` +
-    `• Affiliate: https://s.click.aliexpress.com/e/_DdJwKq1\n` +
-    `• Mobile: https://m.aliexpress.com/i/100500123456.html`
-  );
-});
+// 2. Debugging-Friendly API Call
+async function getShippingMethods(productId) {
+  console.log(`Fetching shipping for ${productId}`);
+  
+  try {
+    // Simulate API response (replace with real API call)
+    return [
+      {
+        name: "AliExpress Standard Shipping",
+        days: "15-25",
+        cost: "Free",
+        tracking: true
+      },
+      {
+        name: "DHL Express",
+        days: "3-7", 
+        cost: "$12.99",
+        tracking: true
+      }
+    ];
 
-// 5. Message Handler
+    /* REAL IMPLEMENTATION:
+    const token = await getAuthToken();
+    const response = await axios.get(`https://api.alibaba.com/shipping`, {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { productId }
+    });
+    return response.data.methods;
+    */
+  } catch (error) {
+    console.error('API Failure:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    throw new Error('Shipping API unavailable');
+  }
+}
+
+// 3. Enhanced Error Responses
 bot.on('text', async (ctx) => {
   const url = ctx.message.text.trim();
-  
+  console.log('Received URL:', url);
+
   if (!url.includes('aliexpress.com')) {
-    return ctx.reply('Please send a valid AliExpress link');
+    return ctx.reply('❌ Please send a valid AliExpress link');
   }
 
   try {
     await ctx.sendChatAction('typing');
     const productId = extractProductId(url);
-    
+    console.log('Extracted ID:', productId);
+
     if (!productId) {
-      return ctx.reply('⚠️ Could not identify product. Send direct item links for best results.');
+      return ctx.replyWithMarkdown(
+        `🔍 *Couldn't extract product ID*\n\n` +
+        `Try these link formats:\n` +
+        `• Full URL: \\\`https://www.aliexpress.com/item/100500123456.html\\\`\n` +
+        `• Clean affiliate link: \\\`https://s.click.aliexpress.com/e/_DdJwKq1\\\``
+      );
     }
 
     const methods = await getShippingMethods(productId);
-    
-    if (methods.length === 0) {
-      return ctx.reply('No shipping methods found for this product');
-    }
+    console.log('Methods:', methods);
 
-    let response = `📦 *Shipping Options for* [${productId}](https://www.aliexpress.com/item/${productId}.html)\n\n`;
+    let response = `🚛 *Shipping Options*\n\n`;
     methods.forEach((m, i) => {
-      response += `${i+1}. *${m.name}* (${m.service})\n` +
+      response += `${i+1}. *${m.name}*\n` +
                  `   ⏱ ${m.days} days | 💰 ${m.cost}\n` +
-                 `   Tracking: ${m.tracking}\n\n`;
+                 `   ${m.tracking ? '📦 With tracking' : '🚫 No tracking'}\n\n`;
     });
 
-    ctx.replyWithMarkdown(response);
+    await ctx.replyWithMarkdown(response);
 
   } catch (error) {
     console.error('Handler Error:', error);
-    ctx.reply('⚠️ Error fetching shipping data. Please try again later.');
+    await ctx.replyWithMarkdown(
+      `⚠️ *Shipping Data Unavailable*\n\n` +
+      `Possible reasons:\n` +
+      `• Product doesn't ship to your country\n` +
+      `• Temporary API issue\n\n` +
+      `Try again later or contact support`
+    );
   }
 });
 
-// 6. Vercel Handler
+// Keep other functions unchanged
 module.exports = async (req, res) => {
   try {
     if (req.method === 'POST') {
