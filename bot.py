@@ -240,6 +240,23 @@ def handle_callback_query(call):
   # In[ ]:
 
 
-keep_alive()
+from flask import Flask, request
 
-infinity_polling(timeout=10, long_polling_timeout=5)
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    update = telebot.types.Update.de_json(request.stream.read().decode('utf-8'))
+    bot.process_new_updates([update])
+    return 'OK', 200
+
+# Set webhook (run once)
+def set_webhook():
+    bot.remove_webhook()
+    bot.set_webhook(url='https://ali-express-best-price.vercel.app/webhook')
+
+set_webhook()
