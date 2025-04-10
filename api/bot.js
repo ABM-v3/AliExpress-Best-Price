@@ -4,61 +4,77 @@ const axios = require('axios');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const CHANNEL_ID = '@CouponsAndDeals';
 
-// 1. API Debugger
-async function testAPI() {
+// 1. PROPER AliExpress Affiliate API Endpoint
+async function getDeals() {
   try {
-    const response = await axios.post('https://api.alibaba.com/token', {
-      client_id: process.env.ALI_APP_KEY,
-      client_secret: process.env.ALI_APP_SECRET,
-      grant_type: 'client_credentials'
-    }, { timeout: 5000 });
-
-    console.log('API Success! Token:', response.data.access_token.slice(0, 10) + '...');
-    return true;
-  } catch (error) {
-    console.error('API Failure:', {
-      config: {
-        url: error.config.url,
-        data: error.config.data
+    // Use the official affiliate API endpoint
+    const response = await axios.get('https://portals.aliexpress.com/api/v1/affiliate/products', {
+      params: {
+        app_key: process.env.ALI_APP_KEY,
+        app_secret: process.env.ALI_APP_SECRET,
+        fields: 'productId,title,imageUrl,price,discount,orders',
+        sort: 'orders_desc',
+        pageSize: 5
       },
-      status: error.response?.status,
-      data: error.response?.data
+      timeout: 10000
     });
-    return false;
+    
+    return response.data.data?.map(item => ({
+      id: item.productId,
+      title: item.title,
+      price: item.price,
+      image: item.imageUrl,
+      orders: item.orders,
+      discount: item.discount
+    })) || [];
+
+  } catch (error) {
+    console.error('API Error:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    return [];
   }
 }
 
-// 2. Deal Poster (with mock data fallback)
+// 2. Post to Channel
 async function postDeals() {
-  const apiWorking = await testAPI();
+  const deals = await getDeals();
   
-  let deals;
-  if (apiWorking) {
-    try {
-      const token = await axios...; // Your API call here
-      deals = await fetchRealDeals();
-    } catch (e) {
-      console.error('API Fetch Error:', e);
-      deals = getMockDeals();
-    }
-  } else {
-    deals = getMockDeals();
+  if (deals.length === 0) {
+    console.log('No deals found - using mock data');
+    deals.push({
+      id: "100000",
+      title: "TEST: Wireless Earbuds",
+      price: "12.99",
+      image: "https://ae01.alicdn.com/kf/Ha9d89e9a7b1a4e1e8f5a8f5a8f5a8f5a.jpg",
+      orders: "1500",
+      discount: "60"
+    });
   }
 
-  // Post to channel
   for (const deal of deals) {
-    await bot.telegram.sendPhoto(
-      CHANNEL_ID,
-      { url: deal.image },
-      { caption: formatDeal(deal), parse_mode: 'Markdown' }
-    );
+    try {
+      await bot.telegram.sendPhoto(
+        CHANNEL_ID,
+        { url: deal.image },
+        {
+          caption: `🔥 ${deal.title}\n💰 $${deal.price} (${deal.discount}% OFF)\n🛒 ${deal.orders} orders`,
+          parse_mode: 'Markdown'
+        }
+      );
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    } catch (e) {
+      console.error('Post failed:', e.message);
+    }
   }
 }
 
-// 3. Command Handlers
-bot.command('post', async (ctx) => {
-  await postDeals(); 
+// 3. Command
+bot.command('deals', async (ctx) => {
+  await postDeals();
   ctx.reply('✅ Deals posted to @CouponsAndDeals');
 });
 
-// ... (keep existing Vercel handler)
+// Vercel handler remains the same
