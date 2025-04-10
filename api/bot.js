@@ -19,8 +19,10 @@ function generateSignature(params, secret) {
 // 2. OAuth Token Service
 async function getAccessToken() {
   const params = new URLSearchParams();
-  params.append('client_id', process.env.ALI_APP_KEY);
-  params.append('client_secret', process.env.ALI_APP_SECRET);
+  params.append('client_id', 512082);
+  params.append('client_secret', 8ZR7b0XNh0DDSokcdW50ACF7yUCatSVY);
+
+  
   params.append('grant_type', 'client_credentials');
 
   const { data } = await axios.post(
