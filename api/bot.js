@@ -1,59 +1,66 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
-const Parser = require('rss-parser');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const CHANNEL_ID = '@CouponsAndDeals';
-const parser = new Parser();
+const TARGET_CHANNEL = '@CouponsAndDeals'; // Your channel
+const CACHE = new Map(); // Stores recent posts
 
-// 1. Fetch Deals from AliExpress Affiliate RSS Feed
-async function getDealsFromRSS() {
+// 1. Store recent posts from public channels
+bot.on('channel_post', (ctx) => {
+  if (ctx.channelPost?.text?.includes('deal') || ctx.channelPost?.caption?.includes('deal')) {
+    CACHE.set(ctx.channelPost.message_id, ctx.channelPost);
+    // Keep only last 20 posts
+    if (CACHE.size > 20) CACHE.delete([...CACHE.keys()][0]);
+  }
+});
+
+// 2. Manual Trigger Command
+bot.command('copylatest', async (ctx) => {
   try {
-    const feed = await parser.parseURL('https://portals.aliexpress.com/affiliate/rss.htm');
-    return feed.items.slice(0, 5).map(item => ({
-      title: item.title,
-      link: item.link,
-      image: item.enclosure?.url || 'https://via.placeholder.com/300'
-    }));
-  } catch (error) {
-    console.error('RSS Error:', error);
-    return [];
-  }
-}
-
-// 2. Post to Channel
-async function postDeals() {
-  const deals = await getDealsFromRSS();
-  
-  if (deals.length === 0) {
-    deals.push({ // Fallback test deal
-      title: "Wireless Earbuds (Test Data)",
-      link: "https://www.aliexpress.com/item/1000000000000.html",
-      image: "https://ae01.alicdn.com/kf/Ha9d89e9a7b1a4e1e8f5a8f5a8f5a8f5a.jpg"
-    });
-  }
-
-  for (const deal of deals) {
-    try {
-      await bot.telegram.sendPhoto(
-        CHANNEL_ID,
-        { url: deal.image },
-        {
-          caption: `🔥 ${deal.title}\n🔗 ${deal.link}`,
-          parse_mode: 'Markdown'
-        }
-      );
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    } catch (error) {
-      console.error('Post Error:', error.message);
+    if (CACHE.size === 0) {
+      return ctx.reply('No recent deals found in cache. I can only monitor public channels.');
     }
-  }
-}
 
-// 3. Command
-bot.command('deals', async (ctx) => {
-  await postDeals();
-  ctx.reply('✅ Deals posted to @CouponsAndDeals');
+    // Get last 5 deals
+    const recentPosts = [...CACHE.values()].slice(-5).reverse();
+    
+    for (const post of recentPosts) {
+      try {
+        if (post.photo) {
+          const photo = post.photo.pop();
+          await ctx.telegram.sendPhoto(
+            TARGET_CHANNEL,
+            { url: await ctx.telegram.getFileLink(photo.file_id) },
+            { caption: post.caption || 'Hot Deal!', parse_mode: 'Markdown' }
+          );
+        } else if (post.text) {
+          await ctx.telegram.sendMessage(
+            TARGET_CHANNEL,
+            post.text,
+            { parse_mode: 'Markdown' }
+          );
+        }
+        await new Promise(resolve => setTimeout(resolve, 1500)); // Delay
+      } catch (error) {
+        console.error('Copy error:', error.message);
+      }
+    }
+    
+    ctx.reply(`✅ Copied ${recentPosts.length} deals to ${TARGET_CHANNEL}`);
+  } catch (error) {
+    ctx.reply('❌ Error: ' + error.message);
+  }
+});
+
+// 3. Help Command
+bot.command('help', (ctx) => {
+  ctx.replyWithMarkdown(
+    `*How to use:*\n\n` +
+    `1. Add me to any *public* channel with deals\n` +
+    `2. I'll automatically cache recent posts\n` +
+    `3. Use /copylatest to post deals to ${TARGET_CHANNEL}\n\n` +
+    `*Note:* I can only see messages in channels where I'm added!`
+  );
 });
 
 // Vercel handler
