@@ -1,56 +1,35 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
+const Parser = require('rss-parser');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const CHANNEL_ID = '@CouponsAndDeals';
+const parser = new Parser();
 
-// 1. PROPER AliExpress Affiliate API Endpoint
-async function getDeals() {
+// 1. Fetch Deals from AliExpress Affiliate RSS Feed
+async function getDealsFromRSS() {
   try {
-    // Use the official affiliate API endpoint
-    const response = await axios.get('https://portals.aliexpress.com/api/v1/affiliate/products', {
-      params: {
-        app_key: process.env.ALI_APP_KEY,
-        app_secret: process.env.ALI_APP_SECRET,
-        fields: 'productId,title,imageUrl,price,discount,orders',
-        sort: 'orders_desc',
-        pageSize: 5
-      },
-      timeout: 10000
-    });
-    
-    return response.data.data?.map(item => ({
-      id: item.productId,
+    const feed = await parser.parseURL('https://portals.aliexpress.com/affiliate/rss.htm');
+    return feed.items.slice(0, 5).map(item => ({
       title: item.title,
-      price: item.price,
-      image: item.imageUrl,
-      orders: item.orders,
-      discount: item.discount
-    })) || [];
-
+      link: item.link,
+      image: item.enclosure?.url || 'https://via.placeholder.com/300'
+    }));
   } catch (error) {
-    console.error('API Error:', {
-      status: error.response?.status,
-      data: error.response?.data,
-      message: error.message
-    });
+    console.error('RSS Error:', error);
     return [];
   }
 }
 
 // 2. Post to Channel
 async function postDeals() {
-  const deals = await getDeals();
+  const deals = await getDealsFromRSS();
   
   if (deals.length === 0) {
-    console.log('No deals found - using mock data');
-    deals.push({
-      id: "100000",
-      title: "TEST: Wireless Earbuds",
-      price: "12.99",
-      image: "https://ae01.alicdn.com/kf/Ha9d89e9a7b1a4e1e8f5a8f5a8f5a8f5a.jpg",
-      orders: "1500",
-      discount: "60"
+    deals.push({ // Fallback test deal
+      title: "Wireless Earbuds (Test Data)",
+      link: "https://www.aliexpress.com/item/1000000000000.html",
+      image: "https://ae01.alicdn.com/kf/Ha9d89e9a7b1a4e1e8f5a8f5a8f5a8f5a.jpg"
     });
   }
 
@@ -60,13 +39,13 @@ async function postDeals() {
         CHANNEL_ID,
         { url: deal.image },
         {
-          caption: `🔥 ${deal.title}\n💰 $${deal.price} (${deal.discount}% OFF)\n🛒 ${deal.orders} orders`,
+          caption: `🔥 ${deal.title}\n🔗 ${deal.link}`,
           parse_mode: 'Markdown'
         }
       );
       await new Promise(resolve => setTimeout(resolve, 2000));
-    } catch (e) {
-      console.error('Post failed:', e.message);
+    } catch (error) {
+      console.error('Post Error:', error.message);
     }
   }
 }
@@ -77,4 +56,15 @@ bot.command('deals', async (ctx) => {
   ctx.reply('✅ Deals posted to @CouponsAndDeals');
 });
 
-// Vercel handler remains the same
+// Vercel handler
+module.exports = async (req, res) => {
+  try {
+    if (req.method === 'POST') {
+      await bot.handleUpdate(req.body);
+    }
+    res.status(200).json({ status: 'OK' });
+  } catch (e) {
+    console.error('Handler Error:', e);
+    res.status(200).json({ status: 'Error handled' });
+  }
+};
