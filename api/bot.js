@@ -1,74 +1,43 @@
 const { Telegraf } = require('telegraf');
-const axios = require('axios');
-
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const TARGET_CHANNEL = '@CouponsAndDeals'; // Your channel
-const CACHE = new Map(); // Stores recent posts
 
-// 1. Store recent posts from public channels
-bot.on('channel_post', (ctx) => {
-  if (ctx.channelPost?.text?.includes('deal') || ctx.channelPost?.caption?.includes('deal')) {
-    CACHE.set(ctx.channelPost.message_id, ctx.channelPost);
-    // Keep only last 20 posts
-    if (CACHE.size > 20) CACHE.delete([...CACHE.keys()][0]);
-  }
-});
+// Store seen posts (in-memory, replace with DB for production)
+const postCache = new Set();
 
-// 2. Manual Trigger Command
-bot.command('copylatest', async (ctx) => {
+// Monitor all channels where bot is added
+bot.on(['channel_post', 'edited_channel_post'], async (ctx) => {
   try {
-    if (CACHE.size === 0) {
-      return ctx.reply('No recent deals found in cache. I can only monitor public channels.');
-    }
+    const post = ctx.update.channel_post || ctx.update.edited_channel_post;
+    
+    // Skip if already processed or not from monitored channel
+    if (postCache.has(post.message_id)) return;
+    postCache.add(post.message_id);
 
-    // Get last 5 deals
-    const recentPosts = [...CACHE.values()].slice(-5).reverse();
+    // Forward to your channel
+    await ctx.telegram.copyMessage(
+      TARGET_CHANNEL,
+      post.chat.id,
+      post.message_id,
+      { parse_mode: 'Markdown' }
+    );
     
-    for (const post of recentPosts) {
-      try {
-        if (post.photo) {
-          const photo = post.photo.pop();
-          await ctx.telegram.sendPhoto(
-            TARGET_CHANNEL,
-            { url: await ctx.telegram.getFileLink(photo.file_id) },
-            { caption: post.caption || 'Hot Deal!', parse_mode: 'Markdown' }
-          );
-        } else if (post.text) {
-          await ctx.telegram.sendMessage(
-            TARGET_CHANNEL,
-            post.text,
-            { parse_mode: 'Markdown' }
-          );
-        }
-        await new Promise(resolve => setTimeout(resolve, 1500)); // Delay
-      } catch (error) {
-        console.error('Copy error:', error.message);
-      }
-    }
-    
-    ctx.reply(`✅ Copied ${recentPosts.length} deals to ${TARGET_CHANNEL}`);
+    console.log(`Copied post from ${post.chat.title}`);
+
   } catch (error) {
-    ctx.reply('❌ Error: ' + error.message);
+    console.error('Copy error:', error.message);
   }
 });
 
-// 3. Help Command
-bot.command('help', (ctx) => {
-  ctx.replyWithMarkdown(
-    `*How to use:*\n\n` +
-    `1. Add me to any *public* channel with deals\n` +
-    `2. I'll automatically cache recent posts\n` +
-    `3. Use /copylatest to post deals to ${TARGET_CHANNEL}\n\n` +
-    `*Note:* I can only see messages in channels where I'm added!`
-  );
+// Manual trigger command
+bot.command('forcecopy', async (ctx) => {
+  await ctx.reply(`Monitoring ${postCache.size} posts. I'll auto-copy new deals to ${TARGET_CHANNEL}`);
 });
 
 // Vercel handler
 module.exports = async (req, res) => {
   try {
-    if (req.method === 'POST') {
-      await bot.handleUpdate(req.body);
-    }
+    if (req.method === 'POST') await bot.handleUpdate(req.body);
     res.status(200).json({ status: 'OK' });
   } catch (e) {
     console.error('Handler Error:', e);
