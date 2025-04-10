@@ -2,10 +2,31 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/scraper.js",
+      "src": "api/bot.js",
       "use": "@vercel/node",
-      "config": { 
-        "includeFiles": ["node_modules/puppeteer/.local-chromium/**"]
+      "config": {
+        "includeFiles": [
+          "node_modules/**/*",
+          "package.json"
+        ],
+        "maxLambdaSize": "15mb"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/bot",
+      "dest": "/api/bot.js",
+      "methods": ["POST"],
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    },
+    {
+      "src": "/",
+      "status": 200,
+      "headers": {
+        "Cache-Control": "public, max-age=3600"
       }
     }
   ]
