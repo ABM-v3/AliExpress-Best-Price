@@ -9,7 +9,8 @@
           "node_modules/**/*",
           "package.json"
         ],
-        "maxLambdaSize": "15mb"
+        "maxLambdaSize": "15mb",
+        "suppressResponse": false
       }
     }
   ],
@@ -19,15 +20,19 @@
       "dest": "/api/bot.js",
       "methods": ["POST"],
       "headers": {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*"
       }
     },
     {
       "src": "/",
-      "status": 200,
-      "headers": {
-        "Cache-Control": "public, max-age=3600"
-      }
+      "dest": "/api/bot.js",
+      "methods": ["GET"]
+    },
+    {
+      "src": "/test",
+      "dest": "/api/bot.js",
+      "methods": ["GET"]
     }
   ]
 }
