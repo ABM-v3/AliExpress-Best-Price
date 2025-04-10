@@ -1,114 +1,182 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
 const crypto = require('crypto');
+const { URLSearchParams } = require('url');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
+const AFFILIATE_TAG = process.env.AFFILIATE_ID || 'your_default_tag';
 
-// 1. Enhanced Error Handling for API Calls
-async function safeApiCall(fn) {
-  try {
-    return await fn();
-  } catch (error) {
-    console.error('API Error:', {
-      url: error.config?.url,
-      params: error.config?.params,
-      status: error.response?.status,
-      data: error.response?.data
-    });
-    throw new Error('AliExpress API is currently unavailable. Please try again later.');
+// 1. Signature Generation (HMAC-SHA256)
+function generateSignature(params, secret) {
+  const sorted = Object.keys(params).sort();
+  const signStr = sorted.map(key => `${key}${params[key]}`).join('');
+  return crypto.createHmac('sha256', secret)
+    .update(signStr)
+    .digest('hex')
+    .toUpperCase();
+}
+
+// 2. OAuth Token Service
+async function getAccessToken() {
+  const params = new URLSearchParams();
+  params.append('client_id', process.env.ALI_APP_KEY);
+  params.append('client_secret', process.env.ALI_APP_SECRET);
+  params.append('grant_type', 'client_credentials');
+
+  const { data } = await axios.post(
+    'https://oauth.aliexpress.com/token',
+    params,
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cache-Control': 'no-cache'
+      },
+      timeout: 5000
+    }
+  );
+  
+  if (!data.access_token) {
+    throw new Error(`Auth failed: ${data.error_description || 'Unknown error'}`);
   }
+  return data.access_token;
 }
 
-// 2. Unified Product Response Handler
-function formatProduct(product) {
-  // Handle both product.query and product.detail responses
-  const base = product.product || product;
-  return {
-    id: base.productId || base.productid,
-    title: base.productTitle || base.title,
-    price: base.salePrice || base.price,
-    image: base.productImage || base.image,
-    discount: base.discount || 0,
-    url: base.shopUrl || base.url
+// 3. Core API Request Handler
+async function aliApiRequest(method, params = {}) {
+  const token = await getAccessToken();
+  const timestamp = new Date().toISOString();
+
+  const baseParams = {
+    method,
+    app_key: process.env.ALI_APP_KEY,
+    sign_method: 'hmac-sha256',
+    timestamp,
+    v: '2.0',
+    access_token: token,
+    ...params
   };
+
+  baseParams.sign = generateSignature(baseParams, process.env.ALI_APP_SECRET);
+
+  const { data } = await axios.get('https://api.aliexpress.com/rest', {
+    params: baseParams,
+    timeout: 10000
+  });
+
+  if (data.error_code) {
+    throw new Error(`API ${data.error_code}: ${data.error_message}`);
+  }
+
+  return data.result;
 }
 
-// 3. Robust Product Search
-async function findProducts(query) {
-  return safeApiCall(async () => {
-    const token = await getAccessToken();
-    const isUrl = query.includes('aliexpress.com');
-    const timestamp = new Date().toISOString();
-
-    const params = {
-      method: isUrl ? 'aliexpress.affiliate.product.detail' : 'aliexpress.affiliate.product.query',
-      app_key: process.env.ALI_APP_KEY,
-      sign_method: 'hmac-sha256',
-      timestamp,
-      v: '2.0',
-      access_token: token,
-      fields: 'productId,productTitle,productImage,salePrice,discount,shopUrl'
-    };
-
-    if (isUrl) {
-      const productId = extractProductId(query);
-      if (!productId) throw new Error('Invalid AliExpress URL');
-      params.productId = productId;
-    } else {
-      params.keywords = query;
-      params.sort = 'price_asc';
-      params.page_size = '3';
-    }
-
-    params.sign = generateSignature(params, process.env.ALI_APP_SECRET);
-
-    const response = await axios.get('https://api.aliexpress.com/rest', { params });
-    
-    // Handle both single product and list responses
-    if (isUrl) {
-      return [formatProduct(response.data.result)];
-    }
-    return response.data.result?.products?.map(formatProduct) || [];
+// 4. Product Services
+async function searchProducts(query) {
+  return aliApiRequest('aliexpress.affiliate.product.query', {
+    keywords: query,
+    fields: 'productId,productTitle,productImage,salePrice,discount,shopUrl,commissionRate',
+    sort: 'price_asc',
+    page_size: 3,
+    platform_product_type: 'ALL'
   });
 }
 
-// ... (keep previous helper functions: getAccessToken, extractProductId, generateAffiliateLink)
+async function getProductDetails(productId) {
+  return aliApiRequest('aliexpress.affiliate.product.detail', {
+    productId,
+    fields: 'productId,productTitle,productImage,salePrice,discount,shopUrl,commissionRate'
+  });
+}
 
-// 4. Enhanced Bot Response
+// 5. URL Parser
+function extractProductId(url) {
+  const patterns = [
+    /aliexpress\.com\/item\/(\d+)/,
+    /\/i\/(\d+)/,
+    /id=(\d+)/
+  ];
+  
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+// 6. Affiliate Link Generator
+function generateAffiliateLink(productId) {
+  return `https://s.click.aliexpress.com/deeplink?id=${AFFILIATE_TAG}&url=/item/${productId}.html`;
+}
+
+// 7. Bot Message Handlers
+bot.start((ctx) => ctx.replyWithMarkdown(
+  `🛒 *AliExpress Price Bot*\n\n` +
+  `Send me:\n` +
+  `• Product *keywords* (e.g. "wireless earbuds")\n` +
+  `• Or *product links* (e.g. https://www.aliexpress.com/item/123.html)\n\n` +
+  `I'll find you the best deals!`
+));
+
 bot.on('text', async (ctx) => {
   try {
     await ctx.sendChatAction('typing');
-    const products = await findProducts(ctx.message.text);
+    const input = ctx.message.text.trim();
+    const isUrl = input.includes('aliexpress.com');
+
+    let products = [];
+    if (isUrl) {
+      const productId = extractProductId(input);
+      if (!productId) throw new Error('Invalid AliExpress URL format');
+      const details = await getProductDetails(productId);
+      products = [details];
+    } else {
+      const results = await searchProducts(input);
+      products = results.products || [];
+    }
 
     if (products.length === 0) {
-      return ctx.reply('🔍 No products found. Try:\n• Different keywords\n• Direct AliExpress product links');
+      return ctx.reply('🔍 No products found. Try different keywords or check your link.');
     }
 
     for (const product of products) {
-      const message = `🎯 *${product.title}*\n` +
-                     `💰 $${product.price} (${product.discount}% OFF)\n` +
-                     `🔗 [Buy Now](${generateAffiliateLink(product.id)})`;
+      const message = [
+        `🎯 *${product.productTitle}*`,
+        `💰 Price: $${product.salePrice} (${product.discount}% OFF)`,
+        `📊 Commission: ${product.commissionRate}%`,
+        `🔗 [Buy Now](${generateAffiliateLink(product.productId)})`
+      ].join('\n');
 
       try {
-        if (product.image) {
+        if (product.productImage) {
           await ctx.replyWithPhoto(
-            { url: product.image },
+            { url: product.productImage },
             { caption: message, parse_mode: 'Markdown' }
           );
         } else {
           await ctx.replyWithMarkdown(message);
         }
-      } catch (e) {
-        console.error('Send Error:', e.message);
-        await ctx.replyWithMarkdown(message); // Fallback to text
+      } catch (error) {
+        console.error('Send error:', error);
+        await ctx.replyWithMarkdown(message); // Fallback
       }
       await new Promise(resolve => setTimeout(resolve, 1500));
     }
 
   } catch (error) {
-    console.error('Handler Error:', error);
-    ctx.reply(`⚠️ ${error.message}`);
+    console.error('Handler error:', error);
+    ctx.reply(`⚠️ Error: ${error.message}`);
   }
 });
 
-// ... (keep Vercel handler)
+// 8. Vercel Handler
+module.exports = async (req, res) => {
+  try {
+    if (req.method === 'POST') {
+      await bot.handleUpdate(req.body);
+    }
+    res.status(200).json({ status: 'OK' });
+  } catch (e) {
+    console.error('Webhook error:', e);
+    res.status(200).json({ status: 'Error handled' });
+  }
+};
