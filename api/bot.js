@@ -1,113 +1,87 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
-const cron = require('node-cron');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const CHANNEL_ID = process.env.CHANNEL_ID; // Your channel username (e.g., '@yourchannel')
+const CHANNEL_ID = process.env.CHANNEL_ID; // Format: '@yourchannelname'
 
-// 1. AliExpress API Authentication
-async function getAliToken() {
+// 1. AliExpress API Access
+async function getAliExpressDeals() {
   try {
-    const response = await axios.post('https://api.alibaba.com/token', {
+    // First get API token
+    const authRes = await axios.post('https://api.alibaba.com/token', {
       client_id: process.env.ALI_APP_KEY,
       client_secret: process.env.ALI_APP_SECRET,
       grant_type: 'client_credentials'
     });
-    return response.data.access_token;
-  } catch (error) {
-    console.error('Auth Error:', error.response?.data || error.message);
-    throw error;
-  }
-}
 
-// 2. Fetch Daily Deals
-async function fetchDailyDeals() {
-  try {
-    const token = await getAliToken();
+    // Then fetch deals
     const response = await axios.get('https://api.alibaba.com/products/search', {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: {
+        Authorization: `Bearer ${authRes.data.access_token}`
+      },
       params: {
         sort: 'orders_desc',
-        pageSize: 5,
+        pageSize: 3,
         minPrice: 1,
         maxPrice: 50,
-        locale: 'en',
-        currency: 'USD'
+        locale: 'en'
       }
     });
 
-    return response.data?.data?.map(product => ({
-      id: product.productId,
-      title: product.title,
-      price: product.price.value,
-      originalPrice: product.originalPrice?.value || product.price.value * 1.5,
-      image: product.imageUrl,
-      orders: product.tradeCount,
-      rating: product.evaluation?.star || 4.5
+    return response.data?.data?.map(item => ({
+      title: item.title,
+      price: item.price.value,
+      image: item.imageUrl,
+      productUrl: `https://www.aliexpress.com/item/${item.productId}.html`
     })) || [];
+
   } catch (error) {
-    console.error('Deals Error:', error.response?.data || error.message);
+    console.error('API Error:', {
+      status: error.response?.status,
+      message: error.message,
+      data: error.response?.data
+    });
     return [];
   }
 }
 
-// 3. Generate Affiliate Link
-function generateAffLink(productId) {
-  return `https://s.click.aliexpress.com/deeplink?id=${process.env.AFFILIATE_ID}&url=/item/${productId}.html`;
-}
-
-// 4. Format Deal Post
-function formatDeal(product) {
-  const discount = Math.round((1 - product.price / product.originalPrice) * 100);
-  
-  return `🔥 *${product.title}*\n\n` +
-         `💰 Price: $${product.price} (was $${product.originalPrice}) - ${discount}% OFF\n` +
-         `⭐ Rating: ${product.rating}/5 | 🛒 ${product.orders} orders\n` +
-         `🔗 [Buy Now](${generateAffLink(product.id)})`;
-}
-
-// 5. Post to Channel
-async function postDealsToChannel() {
+// 2. Post to Channel
+async function postDeals() {
   try {
-    const deals = await fetchDailyDeals();
+    const deals = await getAliExpressDeals();
     
+    if (deals.length === 0) {
+      console.log('No deals found');
+      return;
+    }
+
     for (const deal of deals) {
       try {
         await bot.telegram.sendPhoto(
           CHANNEL_ID,
           { url: deal.image },
           {
-            caption: formatDeal(deal),
-            parse_mode: 'Markdown',
-            reply_markup: {
-              inline_keyboard: [[
-                { text: '🛒 Buy Now', url: generateAffLink(deal.id) }
-              ]]
-            }
+            caption: `🔥 ${deal.title}\n💰 Price: $${deal.price}\n🔗 ${deal.productUrl}`,
+            parse_mode: 'Markdown'
           }
         );
         await new Promise(resolve => setTimeout(resolve, 2000)); // Delay between posts
       } catch (e) {
-        console.error('Failed to post:', deal.id, e.message);
+        console.error('Failed to post:', e.message);
       }
     }
   } catch (error) {
-    console.error('Posting Error:', error);
+    console.error('Posting failed:', error);
   }
 }
 
-// 6. Schedule Daily Posts (9AM UTC)
-cron.schedule('0 9 * * *', postDealsToChannel);
-
-// 7. Manual Trigger Command
+// 3. Manual Trigger
 bot.command('postdeals', async (ctx) => {
-  if (ctx.chat.id.toString() === CHANNEL_ID.replace('@', '')) {
-    await postDealsToChannel();
-    ctx.reply('Deals posted!');
-  }
+  await postDeals();
+  ctx.reply('Deal posting initiated!');
 });
 
-// 8. Vercel Handler
+// 4. Vercel Handler
 module.exports = async (req, res) => {
   try {
     if (req.method === 'POST') {
@@ -121,4 +95,4 @@ module.exports = async (req, res) => {
 };
 
 // Initial test
-postDealsToChannel();
+postDeals();
