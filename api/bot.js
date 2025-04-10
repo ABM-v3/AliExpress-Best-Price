@@ -2,99 +2,77 @@ const { Telegraf } = require('telegraf');
 const axios = require('axios');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const CHANNEL_ID = '@CouponsAndDeals'; // Your channel
+const CHANNEL_ID = '@CouponsAndDeals';
 
-// 1. Fetch Real AliExpress Deals
-async function fetchRealDeals() {
+// 1. Enhanced API Debugger
+async function testAliExpressAPI() {
   try {
-    // First get API token
+    console.log('Starting API test...');
+    
+    // Test authentication
     const authRes = await axios.post('https://api.alibaba.com/token', {
       client_id: process.env.ALI_APP_KEY,
       client_secret: process.env.ALI_APP_SECRET,
       grant_type: 'client_credentials'
-    });
+    }, { timeout: 5000 });
 
-    // Then fetch trending products
-    const response = await axios.get('https://api.alibaba.com/products/search', {
+    console.log('✅ Auth success. Token:', authRes.data.access_token.slice(0, 15) + '...');
+
+    // Test product search
+    const searchRes = await axios.get('https://api.alibaba.com/products/search', {
       headers: { Authorization: `Bearer ${authRes.data.access_token}` },
-      params: {
-        sort: 'orders_desc',
-        pageSize: 5,
-        minPrice: 1,
-        maxPrice: 50,
-        locale: 'en'
-      },
-      timeout: 10000
+      params: { pageSize: 1, sort: 'orders_desc' },
+      timeout: 5000
     });
 
-    return response.data?.data?.map(item => ({
-      id: item.productId,
-      title: item.title,
-      price: item.price.value,
-      originalPrice: item.originalPrice?.value || item.price.value * 1.5,
-      image: item.imageUrl,
-      orders: item.tradeCount,
-      rating: item.evaluation?.star || 4.5
-    })) || [];
+    console.log('📦 API returned', searchRes.data?.data?.length, 'products');
+    return true;
 
   } catch (error) {
-    console.error('API Error:', {
+    console.error('🔴 API FAILURE:', {
+      config: error.config,
       status: error.response?.status,
       data: error.response?.data,
       message: error.message
     });
-    return [];
+    return false;
   }
 }
 
-// 2. Format Deal Post
-function formatDeal(deal) {
-  const discount = Math.round((1 - deal.price / deal.originalPrice) * 100);
-  return `🔥 *${deal.title}*\n\n` +
-         `💰 Price: $${deal.price} (was $${deal.originalPrice}) - ${discount}% OFF\n` +
-         `⭐ ${deal.rating}/5 | 🛒 ${deal.orders} orders\n` +
-         `🔗 https://www.aliexpress.com/item/${deal.id}.html`;
-}
-
-// 3. Post to Channel with Error Handling
-async function postDeals() {
+// 2. Channel Test Function
+async function testChannelPosting() {
   try {
-    const deals = await fetchRealDeals();
-    console.log(`Found ${deals.length} deals`);
-
-    for (const deal of deals.slice(0, 3)) { // Post top 3 deals
-      try {
-        await bot.telegram.sendPhoto(
-          CHANNEL_ID,
-          { url: deal.image },
-          { 
-            caption: formatDeal(deal),
-            parse_mode: 'Markdown'
-          }
-        );
-        await new Promise(resolve => setTimeout(resolve, 3000)); // Delay between posts
-      } catch (e) {
-        console.error('Failed to post:', deal.id, e.message);
-        // Fallback to text if image fails
-        await bot.telegram.sendMessage(
-          CHANNEL_ID,
-          formatDeal(deal),
-          { parse_mode: 'Markdown' }
-        );
-      }
-    }
+    const testMsg = await bot.telegram.sendMessage(
+      CHANNEL_ID,
+      '🚀 Test message from bot',
+      { parse_mode: 'Markdown' }
+    );
+    console.log('✅ Channel test success. Message ID:', testMsg.message_id);
+    return true;
   } catch (error) {
-    console.error('Posting failed:', error);
+    console.error('🔴 CHANNEL POST FAILURE:', {
+      channel: CHANNEL_ID,
+      error: error.message,
+      response: error.response?.data
+    });
+    return false;
   }
 }
 
-// 4. Command Handlers
-bot.command('postdeals', async (ctx) => {
-  await postDeals();
-  ctx.reply('✅ Real deals posted to @CouponsAndDeals!');
+// 3. Main Command
+bot.command('debug', async (ctx) => {
+  const apiWorking = await testAliExpressAPI();
+  const channelWorking = await testChannelPosting();
+  
+  ctx.replyWithMarkdown(
+    `🔍 *Debug Results*\n\n` +
+    `API Connection: ${apiWorking ? '✅ Working' : '❌ Failed'}\n` +
+    `Channel Access: ${channelWorking ? '✅ Working' : '❌ Failed'}\n\n` +
+    `Check Vercel logs for details`
+  );
 });
 
-// 5. Vercel Handler
+// 4. Vercel Handler
 module.exports = async (req, res) => {
   try {
     if (req.method === 'POST') {
@@ -106,6 +84,3 @@ module.exports = async (req, res) => {
     res.status(200).json({ status: 'Error handled' });
   }
 };
-
-// Initial test (comment out after verification)
-postDeals();
