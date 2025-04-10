@@ -1,46 +1,55 @@
+const puppeteer = require('puppeteer');
 const { Telegraf } = require('telegraf');
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const TARGET_CHANNEL = '@CouponsAndDeals'; // Your channel
+const TARGET_CHANNEL = '@CouponsAndDeals';
 
-// Store seen posts (in-memory, replace with DB for production)
-const postCache = new Set();
+async function scrapeChannel(channelUrl) {
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    headless: true
+  });
+  
+  const page = await browser.newPage();
+  await page.goto(channelUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
-// Monitor all channels where bot is added
-bot.on(['channel_post', 'edited_channel_post'], async (ctx) => {
-  try {
-    const post = ctx.update.channel_post || ctx.update.edited_channel_post;
-    
-    // Skip if already processed or not from monitored channel
-    if (postCache.has(post.message_id)) return;
-    postCache.add(post.message_id);
+  // Extract posts (CSS selectors may need adjustment)
+  const posts = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('.tgme_widget_message')).map(post => ({
+      text: post.querySelector('.tgme_widget_message_text')?.innerText,
+      image: post.querySelector('.tgme_widget_message_photo_wrap')?.style.backgroundImage.match(/url\('(.*)'\)/)?.[1],
+      time: post.querySelector('.tgme_widget_message_date time')?.getAttribute('datetime')
+    }));
+  });
 
-    // Forward to your channel
-    await ctx.telegram.copyMessage(
-      TARGET_CHANNEL,
-      post.chat.id,
-      post.message_id,
-      { parse_mode: 'Markdown' }
-    );
-    
-    console.log(`Copied post from ${post.chat.title}`);
-
-  } catch (error) {
-    console.error('Copy error:', error.message);
-  }
-});
+  await browser.close();
+  return posts.filter(p => p.text || p.image);
+}
 
 // Manual trigger command
-bot.command('forcecopy', async (ctx) => {
-  await ctx.reply(`Monitoring ${postCache.size} posts. I'll auto-copy new deals to ${TARGET_CHANNEL}`);
+bot.command('scrape', async (ctx) => {
+  try {
+    const channelUrl = 'https://t.me/s/SafwadijaExpress'; // Note /s/ format
+    const posts = await scrapeChannel(channelUrl);
+    
+    // Send last 3 posts
+    for (const post of posts.slice(0, 3)) {
+      if (post.image) {
+        await bot.telegram.sendPhoto(
+          TARGET_CHANNEL,
+          post.image,
+          { caption: post.text || 'New Deal!' }
+        );
+      } else if (post.text) {
+        await bot.telegram.sendMessage(TARGET_CHANNEL, post.text);
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    ctx.reply(`✅ Copied ${posts.length} posts from ${channelUrl}`);
+  } catch (error) {
+    ctx.reply(`❌ Error: ${error.message}`);
+    console.error('Scrape error:', error);
+  }
 });
 
-// Vercel handler
-module.exports = async (req, res) => {
-  try {
-    if (req.method === 'POST') await bot.handleUpdate(req.body);
-    res.status(200).json({ status: 'OK' });
-  } catch (e) {
-    console.error('Handler Error:', e);
-    res.status(200).json({ status: 'Error handled' });
-  }
-};
+module.exports = bot;
