@@ -2,27 +2,14 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/bot.js",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["node_modules/**/*"],
-        "maxLambdaSize": "15mb"
-      }
+      "src": "app.py",
+      "use": "@vercel/python"
     }
   ],
   "routes": [
     {
-      "src": "/api/bot",
-      "dest": "/api/bot.js",
-      "methods": ["POST"],
-      "headers": {
-        "Content-Type": "application/json"
-      }
-    },
-    {
-      "src": "/",
-      "dest": "/api/bot.js",
-      "methods": ["GET"]
+      "src": "/(.*)",
+      "dest": "app.py"
     }
   ]
 }
