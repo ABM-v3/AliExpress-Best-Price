@@ -1,9 +1,10 @@
 {
-  "name": "aliexpress-deal-bot",
-  "version": "1.0.0",
-  "dependencies": {
-    "telegraf": "^4.12.2",
-    "axios": "^1.6.2",
-    "node-cron": "^3.0.2"
-  }
+     "name": "aliexpress-price-bot",
+     "dependencies": {
+       "telegraf": "^4.12.2",
+       "axios": "^1.6.2"
+     },
+     "engines": {
+       "node": "18.x"
+     }
 }
