@@ -24,3 +24,9 @@ telebot==0.0.5
 tzdata==2023.3
 urllib3==2.0.6
 Werkzeug==3.0.1
+
+telebot
+flask
+python-dotenv
+aliexpress_api
+requests
