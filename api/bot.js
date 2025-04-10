@@ -2,98 +2,100 @@ const { Telegraf } = require('telegraf');
 const axios = require('axios');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const CHANNEL_ID = '@CouponsAndDeals'; // Hardcoded to your channel
+const CHANNEL_ID = '@CouponsAndDeals'; // Your channel
 
-// 1. Debugging function to verify channel access
-async function checkBotRights() {
+// 1. Fetch Real AliExpress Deals
+async function fetchRealDeals() {
   try {
-    const chat = await bot.telegram.getChat(CHANNEL_ID);
-    console.log('Bot has access to channel:', chat.title);
-    const members = await bot.telegram.getChatAdministrators(CHANNEL_ID);
-    const isAdmin = members.some(m => m.user.id === bot.botInfo.id);
-    console.log('Bot is admin:', isAdmin);
-    return isAdmin;
-  } catch (error) {
-    console.error('Channel access error:', error.message);
-    return false;
-  }
-}
-
-// 2. Simplified Deal Fetcher
-async function fetchTestDeals() {
-  // Using mock data to eliminate API issues
-  return [
-    {
-      title: "Wireless Earbuds Bluetooth 5.0",
-      price: 12.99,
-      image: "https://ae01.alicdn.com/kf/Ha9d89e9a7b1a4e1e8f5a8f5a8f5a8f5a.jpg",
-      url: "https://www.aliexpress.com/item/1000000000000.html"
-    },
-    {
-      title: "Smart Watch Fitness Tracker",
-      price: 25.99,
-      image: "https://ae01.alicdn.com/kf/Ha9d89e9a7b1a4e1e8f5a8f5a8f5a8f5b.jpg",
-      url: "https://www.aliexpress.com/item/1000000000001.html"
-    }
-  ];
-}
-
-// 3. Channel Posting with Error Handling
-async function postToChannel(message, imageUrl) {
-  try {
-    if (imageUrl) {
-      await bot.telegram.sendPhoto(
-        CHANNEL_ID,
-        { url: imageUrl },
-        { caption: message, parse_mode: 'Markdown' }
-      );
-    } else {
-      await bot.telegram.sendMessage(CHANNEL_ID, message, { parse_mode: 'Markdown' });
-    }
-    console.log('Successfully posted to channel');
-    return true;
-  } catch (error) {
-    console.error('Posting failed:', {
-      error: error.message,
-      response: error.response?.data,
-      channel: CHANNEL_ID
+    // First get API token
+    const authRes = await axios.post('https://api.alibaba.com/token', {
+      client_id: process.env.ALI_APP_KEY,
+      client_secret: process.env.ALI_APP_SECRET,
+      grant_type: 'client_credentials'
     });
-    return false;
+
+    // Then fetch trending products
+    const response = await axios.get('https://api.alibaba.com/products/search', {
+      headers: { Authorization: `Bearer ${authRes.data.access_token}` },
+      params: {
+        sort: 'orders_desc',
+        pageSize: 5,
+        minPrice: 1,
+        maxPrice: 50,
+        locale: 'en'
+      },
+      timeout: 10000
+    });
+
+    return response.data?.data?.map(item => ({
+      id: item.productId,
+      title: item.title,
+      price: item.price.value,
+      originalPrice: item.originalPrice?.value || item.price.value * 1.5,
+      image: item.imageUrl,
+      orders: item.tradeCount,
+      rating: item.evaluation?.star || 4.5
+    })) || [];
+
+  } catch (error) {
+    console.error('API Error:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    return [];
   }
 }
 
-// 4. Main Deal-Posting Function
+// 2. Format Deal Post
+function formatDeal(deal) {
+  const discount = Math.round((1 - deal.price / deal.originalPrice) * 100);
+  return `🔥 *${deal.title}*\n\n` +
+         `💰 Price: $${deal.price} (was $${deal.originalPrice}) - ${discount}% OFF\n` +
+         `⭐ ${deal.rating}/5 | 🛒 ${deal.orders} orders\n` +
+         `🔗 https://www.aliexpress.com/item/${deal.id}.html`;
+}
+
+// 3. Post to Channel with Error Handling
 async function postDeals() {
-  console.log('Starting deal posting...');
-  
-  // Verify bot permissions first
-  if (!(await checkBotRights())) {
-    console.error('Bot lacks channel permissions');
-    return;
-  }
+  try {
+    const deals = await fetchRealDeals();
+    console.log(`Found ${deals.length} deals`);
 
-  const deals = await fetchTestDeals();
-  console.log(`Found ${deals.length} deals`);
-
-  for (const deal of deals) {
-    const message = `🔥 *${deal.title}*\n💰 Price: $${deal.price}\n🔗 ${deal.url}`;
-    const success = await postToChannel(message, deal.image);
-    
-    if (success) {
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Delay between posts
+    for (const deal of deals.slice(0, 3)) { // Post top 3 deals
+      try {
+        await bot.telegram.sendPhoto(
+          CHANNEL_ID,
+          { url: deal.image },
+          { 
+            caption: formatDeal(deal),
+            parse_mode: 'Markdown'
+          }
+        );
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Delay between posts
+      } catch (e) {
+        console.error('Failed to post:', deal.id, e.message);
+        // Fallback to text if image fails
+        await bot.telegram.sendMessage(
+          CHANNEL_ID,
+          formatDeal(deal),
+          { parse_mode: 'Markdown' }
+        );
+      }
     }
+  } catch (error) {
+    console.error('Posting failed:', error);
   }
 }
 
-// 5. Command Handlers
+// 4. Command Handlers
 bot.command('postdeals', async (ctx) => {
   await postDeals();
-  ctx.reply('Deals posted to @CouponsAndDeals! Check the channel.');
+  ctx.reply('✅ Real deals posted to @CouponsAndDeals!');
 });
 
-// 6. Vercel Handler
+// 5. Vercel Handler
 module.exports = async (req, res) => {
-  console.log('Received request:', req.method);
   try {
     if (req.method === 'POST') {
       await bot.handleUpdate(req.body);
@@ -105,5 +107,5 @@ module.exports = async (req, res) => {
   }
 };
 
-// Initial test (remove in production)
+// Initial test (comment out after verification)
 postDeals();
