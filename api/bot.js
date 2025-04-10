@@ -19,8 +19,8 @@ function generateSignature(params, secret) {
 // 2. OAuth Token Service
 async function getAccessToken() {
   const params = new URLSearchParams();
-  params.append('client_id', 512082);
-  params.append('client_secret', 8ZR7b0XNh0DDSokcdW50ACF7yUCatSVY);
+  params.append('client_id', '512082');
+  params.append('client_secret', '8ZR7b0XNh0DDSokcdW50ACF7yUCatSVY');
 
   
   params.append('grant_type', 'client_credentials');
