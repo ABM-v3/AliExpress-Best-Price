@@ -5,12 +5,8 @@
       "src": "api/bot.js",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": [
-          "node_modules/**/*",
-          "package.json"
-        ],
-        "maxLambdaSize": "15mb",
-        "suppressResponse": false
+        "includeFiles": ["node_modules/**/*"],
+        "maxLambdaSize": "15mb"
       }
     }
   ],
@@ -20,17 +16,11 @@
       "dest": "/api/bot.js",
       "methods": ["POST"],
       "headers": {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*"
+        "Content-Type": "application/json"
       }
     },
     {
       "src": "/",
-      "dest": "/api/bot.js",
-      "methods": ["GET"]
-    },
-    {
-      "src": "/test",
       "dest": "/api/bot.js",
       "methods": ["GET"]
     }
