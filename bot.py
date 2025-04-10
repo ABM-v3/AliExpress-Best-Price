@@ -11,6 +11,8 @@ from aliexpress_api import AliexpressApi, models
 import re
 import requests, json
 from urllib.parse import urlparse, parse_qs
+from flask import Flask, request
+
 
 # In[2]:
 
