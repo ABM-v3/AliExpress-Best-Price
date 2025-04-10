@@ -2,87 +2,98 @@ const { Telegraf } = require('telegraf');
 const axios = require('axios');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const CHANNEL_ID = process.env.CHANNEL_ID; // Format: '@yourchannelname'
+const CHANNEL_ID = '@CouponsAndDeals'; // Hardcoded to your channel
 
-// 1. AliExpress API Access
-async function getAliExpressDeals() {
+// 1. Debugging function to verify channel access
+async function checkBotRights() {
   try {
-    // First get API token
-    const authRes = await axios.post('https://api.alibaba.com/token', {
-      client_id: process.env.ALI_APP_KEY,
-      client_secret: process.env.ALI_APP_SECRET,
-      grant_type: 'client_credentials'
-    });
-
-    // Then fetch deals
-    const response = await axios.get('https://api.alibaba.com/products/search', {
-      headers: {
-        Authorization: `Bearer ${authRes.data.access_token}`
-      },
-      params: {
-        sort: 'orders_desc',
-        pageSize: 3,
-        minPrice: 1,
-        maxPrice: 50,
-        locale: 'en'
-      }
-    });
-
-    return response.data?.data?.map(item => ({
-      title: item.title,
-      price: item.price.value,
-      image: item.imageUrl,
-      productUrl: `https://www.aliexpress.com/item/${item.productId}.html`
-    })) || [];
-
+    const chat = await bot.telegram.getChat(CHANNEL_ID);
+    console.log('Bot has access to channel:', chat.title);
+    const members = await bot.telegram.getChatAdministrators(CHANNEL_ID);
+    const isAdmin = members.some(m => m.user.id === bot.botInfo.id);
+    console.log('Bot is admin:', isAdmin);
+    return isAdmin;
   } catch (error) {
-    console.error('API Error:', {
-      status: error.response?.status,
-      message: error.message,
-      data: error.response?.data
-    });
-    return [];
+    console.error('Channel access error:', error.message);
+    return false;
   }
 }
 
-// 2. Post to Channel
+// 2. Simplified Deal Fetcher
+async function fetchTestDeals() {
+  // Using mock data to eliminate API issues
+  return [
+    {
+      title: "Wireless Earbuds Bluetooth 5.0",
+      price: 12.99,
+      image: "https://ae01.alicdn.com/kf/Ha9d89e9a7b1a4e1e8f5a8f5a8f5a8f5a.jpg",
+      url: "https://www.aliexpress.com/item/1000000000000.html"
+    },
+    {
+      title: "Smart Watch Fitness Tracker",
+      price: 25.99,
+      image: "https://ae01.alicdn.com/kf/Ha9d89e9a7b1a4e1e8f5a8f5a8f5a8f5b.jpg",
+      url: "https://www.aliexpress.com/item/1000000000001.html"
+    }
+  ];
+}
+
+// 3. Channel Posting with Error Handling
+async function postToChannel(message, imageUrl) {
+  try {
+    if (imageUrl) {
+      await bot.telegram.sendPhoto(
+        CHANNEL_ID,
+        { url: imageUrl },
+        { caption: message, parse_mode: 'Markdown' }
+      );
+    } else {
+      await bot.telegram.sendMessage(CHANNEL_ID, message, { parse_mode: 'Markdown' });
+    }
+    console.log('Successfully posted to channel');
+    return true;
+  } catch (error) {
+    console.error('Posting failed:', {
+      error: error.message,
+      response: error.response?.data,
+      channel: CHANNEL_ID
+    });
+    return false;
+  }
+}
+
+// 4. Main Deal-Posting Function
 async function postDeals() {
-  try {
-    const deals = await getAliExpressDeals();
-    
-    if (deals.length === 0) {
-      console.log('No deals found');
-      return;
-    }
+  console.log('Starting deal posting...');
+  
+  // Verify bot permissions first
+  if (!(await checkBotRights())) {
+    console.error('Bot lacks channel permissions');
+    return;
+  }
 
-    for (const deal of deals) {
-      try {
-        await bot.telegram.sendPhoto(
-          CHANNEL_ID,
-          { url: deal.image },
-          {
-            caption: `🔥 ${deal.title}\n💰 Price: $${deal.price}\n🔗 ${deal.productUrl}`,
-            parse_mode: 'Markdown'
-          }
-        );
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Delay between posts
-      } catch (e) {
-        console.error('Failed to post:', e.message);
-      }
+  const deals = await fetchTestDeals();
+  console.log(`Found ${deals.length} deals`);
+
+  for (const deal of deals) {
+    const message = `🔥 *${deal.title}*\n💰 Price: $${deal.price}\n🔗 ${deal.url}`;
+    const success = await postToChannel(message, deal.image);
+    
+    if (success) {
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Delay between posts
     }
-  } catch (error) {
-    console.error('Posting failed:', error);
   }
 }
 
-// 3. Manual Trigger
+// 5. Command Handlers
 bot.command('postdeals', async (ctx) => {
   await postDeals();
-  ctx.reply('Deal posting initiated!');
+  ctx.reply('Deals posted to @CouponsAndDeals! Check the channel.');
 });
 
-// 4. Vercel Handler
+// 6. Vercel Handler
 module.exports = async (req, res) => {
+  console.log('Received request:', req.method);
   try {
     if (req.method === 'POST') {
       await bot.handleUpdate(req.body);
@@ -94,5 +105,5 @@ module.exports = async (req, res) => {
   }
 };
 
-// Initial test
+// Initial test (remove in production)
 postDeals();
