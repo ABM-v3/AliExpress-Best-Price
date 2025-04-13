@@ -12,9 +12,8 @@
       "dest": "index.js"
     },
     {
-      "src": "/webhook",
-      "dest": "index.js",
-      "methods": ["POST"]
+      "src": "/webhook/(.*)",
+      "dest": "index.js"
     }
   ]
 }
