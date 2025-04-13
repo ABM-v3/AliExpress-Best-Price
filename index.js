@@ -64,19 +64,25 @@ function extractProductId(url) {
   }
 }
 
-// Improved function to resolve short URLs
+// Improved function to resolve short URLs with timeout handling
 async function resolveShortUrl(url) {
   try {
     console.log(`Resolving URL: ${url}`);
     
+    // Much shorter timeout to prevent hanging
     const response = await axios.get(url, {
-      maxRedirects: 10,
+      maxRedirects: 5,
       validateStatus: function(status) {
         return status >= 200 && status < 400; // Accept all 2xx and 3xx responses
       },
-      timeout: 15000,
+      timeout: 8000, // Reduced timeout to 8 seconds
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Cache-Control': 'max-age=0'
       }
     });
     
@@ -99,6 +105,21 @@ async function resolveShortUrl(url) {
     return finalUrl;
   } catch (error) {
     console.error('Error resolving short URL:', error);
+    
+    // Special case for AliExpress click tracking URLs
+    if (url.includes('click.aliexpress.com')) {
+      console.log('Detected AliExpress tracking URL, attempting alternative resolution...');
+      
+      // For AliExpress tracking URLs, try to extract the product ID directly from the URL
+      // or use the original URL directly if it contains 'item/'
+      if (url.includes('item/')) {
+        return url;
+      }
+      
+      // If we can't resolve a click.aliexpress.com URL, throw a specific error
+      throw new Error('Cannot process AliExpress tracking URL. Please send a direct product link.');
+    }
+    
     throw new Error(`Failed to resolve URL: ${error.message}`);
   }
 }
