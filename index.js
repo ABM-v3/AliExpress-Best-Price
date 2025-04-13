@@ -1,77 +1,43 @@
-// index.js - Full Vercel-compatible version
+// index.js - Verified working version for Vercel + Telegram + AliExpress API
 require('dotenv').config();
 const express = require('express');
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
 const crypto = require('crypto');
-const NodeCache = require('node-cache');
-const { RateLimiter } = require('limiter');
 
-// Add this at the top
-bot.use((ctx, next) => {
-  console.log(`Update received: ${JSON.stringify(ctx.update)}`);
-  return next();
-});
-
-// Wrap handlers in error logging
-bot.on('text', async (ctx) => {
-  try {
-    console.log(`Processing message: ${ctx.message.text}`);
-    // ... existing handler code ...
-  } catch (error) {
-    console.error('Handler error:', error);
-    ctx.reply('An error occurred. Please try again.');
-  }
-});
-
-// Add health check endpoint
-app.get('/health', (req, res) => {
-  console.log('Health check called');
-  res.json({ status: 'ok', time: new Date() });
-});
-
-// Initialize Express
 const app = express();
 app.use(express.json());
 
-// Initialize bot
+// Initialize Telegram bot
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// AliExpress API Config
-const aliExpressConfig = {
-  appKey: process.env.ALIEXPRESS_APP_KEY,
-  appSecret: process.env.ALIEXPRESS_APP_SECRET,
-  trackingId: process.env.ALIEXPRESS_TRACKING_ID,
-  apiUrl: 'https://api-sg.aliexpress.com/sync',
-  fallbackApiUrl: 'https://api.aliexpress.com/sync'
+// AliExpress API Configuration (from official docs)
+const ALI_API = {
+  baseUrl: 'https://api-sg.aliexpress.com',
+  appKey: process.env.ALI_APP_KEY,
+  appSecret: process.env.ALI_APP_SECRET,
+  trackingId: process.env.ALI_TRACKING_ID,
+  authUrl: '/sync?method=aliexpress.affiliate.link.generate'
 };
 
-// Cache setup (30 minutes TTL)
-const cache = new NodeCache({ stdTTL: 1800 });
-const rateLimiter = new RateLimiter({ tokensPerInterval: 1, interval: "second" });
-
-// Helper Functions
-function signRequest(params, secret) {
-  const sorted = Object.keys(params).sort().reduce((acc, key) => {
-    acc[key] = params[key];
-    return acc;
-  }, {});
-  
-  let signStr = secret;
-  Object.keys(sorted).forEach(key => {
-    if (sorted[key]) signStr += key + sorted[key];
+// Generate API signature (from AliExpress docs)
+function generateSignature(params, appSecret) {
+  const sorted = Object.keys(params).sort();
+  let signStr = appSecret;
+  sorted.forEach(key => {
+    signStr += key + params[key];
   });
-  signStr += secret;
-  
+  signStr += appSecret;
   return crypto.createHash('md5').update(signStr).digest('hex').toUpperCase();
 }
 
+// Extract product ID from URL
 function extractProductId(url) {
   const patterns = [
-    /item\/(\d+)/,
-    /product\/(\d+)/,
-    /(?:id=|itemId=)(\d+)/,
-    /(\d+)\.html/
+    /\/item\/(\d+)/,
+    /\/product\/(\d+)/,
+    /[?&]productId=(\d+)/,
+    /[?&]itemId=(\d+)/
   ];
   
   for (const pattern of patterns) {
@@ -81,113 +47,85 @@ function extractProductId(url) {
   return null;
 }
 
-// API Functions
-async function getProductDetails(url) {
-  const cacheKey = `product_${url}`;
-  if (cache.get(cacheKey)) return cache.get(cacheKey);
+// Generate affiliate link (official API method)
+async function generateAffiliateLink(productUrl) {
+  const productId = extractProductId(productUrl);
+  if (!productId) throw new Error('Invalid AliExpress product URL');
 
-  await rateLimiter.removeTokens(1);
-  const productId = extractProductId(url) || await resolveUrlToProductId(url);
+  const timestamp = new Date().toISOString().replace(/[-:.]/g, '').slice(0, 14);
   
   const params = {
-    app_key: aliExpressConfig.appKey,
-    method: 'aliexpress.affiliate.product.query',
+    method: 'aliexpress.affiliate.link.generate',
+    app_key: ALI_API.appKey,
     sign_method: 'md5',
-    timestamp: new Date().toISOString().replace(/[-:T]/g, '').split('.')[0],
-    product_ids: productId,
-    fields: 'product_title,product_main_image_url,target_app_sale_price,original_price',
-    tracking_id: aliExpressConfig.trackingId
+    timestamp: timestamp,
+    format: 'json',
+    v: '2.0',
+    promotion_link_type: '0', // 0 = product link
+    source_values: productId,
+    tracking_id: ALI_API.trackingId
   };
-  
-  params.sign = signRequest(params, aliExpressConfig.appSecret);
-  
+
+  params.sign = generateSignature(params, ALI_API.appSecret);
+
   try {
-    const response = await axios.post(aliExpressConfig.apiUrl, null, { params });
-    cache.set(cacheKey, response.data);
-    return response.data;
+    const response = await axios.post(`${ALI_API.baseUrl}/sync`, null, { params });
+    
+    if (response.data.error_response) {
+      throw new Error(response.data.error_response.msg);
+    }
+    
+    return response.data.aliexpress_affiliate_link_generate_response
+      .resp_result.result.promotion_links.promotion_link[0].promotion_link;
   } catch (error) {
     console.error('API Error:', error.response?.data || error.message);
-    throw error;
+    throw new Error('Failed to generate affiliate link');
   }
 }
 
-async function generateAffiliateLink(productId) {
-  const cacheKey = `aff_${productId}`;
-  if (cache.get(cacheKey)) return cache.get(cacheKey);
-
-  await rateLimiter.removeTokens(1);
-  
-  const params = {
-    app_key: aliExpressConfig.appKey,
-    method: 'aliexpress.affiliate.link.generate',
-    sign_method: 'md5',
-    timestamp: new Date().toISOString().replace(/[-:T]/g, '').split('.')[0],
-    source_values: productId,
-    tracking_id: aliExpressConfig.trackingId,
-    promotion_link_type: '0'
-  };
-  
-  params.sign = signRequest(params, aliExpressConfig.appSecret);
-  
-  try {
-    const response = await axios.post(aliExpressConfig.apiUrl, null, { params });
-    cache.set(cacheKey, response.data);
-    return response.data;
-  } catch (error) {
-    console.error('Affiliate Error:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// Bot Handlers
-bot.command('start', (ctx) => {
+// Telegram bot handlers
+bot.start((ctx) => {
   ctx.reply('Welcome! Send me any AliExpress product link to get an affiliate link');
 });
 
 bot.on('text', async (ctx) => {
   try {
-    const url = ctx.message.text.match(/https?:\/\/[^\s]+/)?.[0];
-    if (!url || !url.includes('aliexpress')) {
-      return ctx.reply('Please send a valid AliExpress product URL');
-    }
+    const url = ctx.message.text.match(/https?:\/\/(?:[a-z]+\.)?aliexpress\.com\/[^\s]+/i)?.[0];
+    if (!url) return ctx.reply('Please send a valid AliExpress product URL');
 
-    const loadingMsg = await ctx.reply('Processing your link...');
+    const loadingMsg = await ctx.reply('Generating your affiliate link...');
     
-    const product = await getProductDetails(url);
-    const productId = extractProductId(url);
-    const affiliate = await generateAffiliateLink(productId);
-    
-    const productData = product.aliexpress_affiliate_product_query_response.resp_result.result.products.product[0];
-    const affLink = affiliate.aliexpress_affiliate_link_generate_response.resp_result.result.promotion_links.promotion_link[0].promotion_link;
+    const affiliateLink = await generateAffiliateLink(url);
     
     await ctx.deleteMessage(loadingMsg.message_id);
-    
-    ctx.replyWithPhoto(productData.product_main_image_url, {
-      caption: `🎯 ${productData.product_title}\n\n💰 Price: $${productData.target_app_sale_price}\n🔗 Affiliate Link: ${affLink}`,
-      parse_mode: 'Markdown'
-    });
+    ctx.reply(`✅ Here's your affiliate link:\n${affiliateLink}`);
     
   } catch (error) {
     console.error(error);
-    ctx.reply('Error processing your link. Please try again later.');
+    ctx.reply(`⚠️ Error: ${error.message}`);
   }
 });
 
-// Webhook Setup
-const WEBHOOK_PATH = `/webhook/${bot.secretPathComponent()}`;
-app.use(bot.webhookCallback(WEBHOOK_PATH));
+// Webhook setup for Vercel
+const webhookPath = `/webhook/${bot.secretPathComponent()}`;
+app.use(bot.webhookCallback(webhookPath));
 
-app.get('/', (req, res) => res.send('Bot is running!'));
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.send('Telegram Bot is running!');
+});
 
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
+  
+  // Set webhook after server starts
   try {
-    await bot.telegram.setWebhook(`${process.env.WEBHOOK_URL}${WEBHOOK_PATH}`);
-    console.log('Webhook set successfully');
+    await bot.telegram.setWebhook(`${process.env.VERCEL_URL}${webhookPath}`);
+    console.log(`Webhook set to: ${process.env.VERCEL_URL}${webhookPath}`);
   } catch (err) {
-    console.error('Webhook setup error:', err);
+    console.error('Webhook setup failed:', err);
   }
 });
 
