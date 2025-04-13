@@ -168,30 +168,46 @@ async function resolveShortUrl(url) {
 
 // Function to generate affiliate link
 async function getAffiliateLink(productId) {
-  try {
-    const timestamp = new Date().toISOString().split('.')[0].replace(/[-:T]/g, '');
-    
-    const params = {
-      app_key: aliExpressConfig.appKey,
-      method: 'aliexpress.affiliate.link.generate',
-      sign_method: 'md5',
-      timestamp: timestamp,
-      format: 'json',
-      v: '2.0',
-      promotion_link_type: '0', // 0 for product links
-      source_values: productId,
-      tracking_id: aliExpressConfig.trackingId
-    };
-    
-    // Add signature
-    params.sign = signRequest(params, aliExpressConfig.appSecret);
-    
-    const response = await axios.post(aliExpressConfig.apiUrl, null, { params });
-    return response.data;
-  } catch (error) {
-    console.error('Error generating affiliate link:', error.message);
-    throw error;
+  let lastError = null;
+  
+  // Try each API endpoint until one works
+  for (const apiUrl of aliExpressConfig.apiUrls) {
+    try {
+      console.log(`Generating affiliate link for product ID ${productId} using ${apiUrl}`);
+      const timestamp = new Date().toISOString().split('.')[0].replace(/[-:T]/g, '');
+      
+      const params = {
+        app_key: aliExpressConfig.appKey,
+        method: 'aliexpress.affiliate.link.generate',
+        sign_method: 'md5',
+        timestamp: timestamp,
+        format: 'json',
+        v: '2.0',
+        promotion_link_type: '0', // 0 for product links
+        source_values: productId,
+        tracking_id: aliExpressConfig.trackingId
+      };
+      
+      // Add signature
+      params.sign = signRequest(params, aliExpressConfig.appSecret);
+      
+      const response = await axios.post(apiUrl, null, { 
+        params,
+        timeout: 10000 // 10 second timeout
+      });
+      
+      console.log('Successfully generated affiliate link');
+      return response.data;
+    } catch (error) {
+      console.error(`Error with API endpoint ${apiUrl}:`, error.message);
+      lastError = error;
+      // Continue to next endpoint
+    }
   }
+  
+  // If we get here, all endpoints failed
+  console.error('All API endpoints failed');
+  throw lastError;
 }
 
 // Function to format product information for response
