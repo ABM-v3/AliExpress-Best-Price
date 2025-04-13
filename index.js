@@ -223,58 +223,22 @@ bot.help((ctx) => {
 bot.on('text', async (ctx) => {
   const text = ctx.message.text;
   
-  // Check if the message contains an AliExpress URL (expanded to catch all AliExpress variations)
-  if (text.includes('aliexpress.com') || 
-      text.includes('ae.aliexpress.com') || 
-      text.includes('a.aliexpress.com') || 
-      text.includes('s.aliexpress') || 
-      text.includes('aliexpress.ru') ||
-      (text.includes('ali') && text.includes('express'))) {
+  // Check if the message contains a URL
+  if (text.includes('aliexpress.com') || text.includes('ae.aliexpress.com') || text.includes('a.aliexpress.com')) {
     try {
-      // Extract URL from message
-      const urlRegex = /(https?:\/\/[^\s]+)/g;
-      const urls = text.match(urlRegex);
+      ctx.reply('Processing your link... Please wait.');
       
-      if (!urls || urls.length === 0) {
-        ctx.reply('Please send a complete AliExpress product URL.');
+      const productId = extractProductId(text);
+      if (!productId) {
+        ctx.reply('Sorry, I couldn\'t recognize this AliExpress link format. Please send a valid product link.');
         return;
       }
       
-      const processingMsg = await ctx.reply('Processing your link... Please wait.');
+      const productDetails = await getProductDetails(productId);
+      const affiliateLink = await getAffiliateLink(productId);
       
-      // Try each URL found in the message
-      for (const url of urls) {
-        console.log(`Processing URL: ${url}`);
-        
-        try {
-          // First try to get product details
-          const productDetails = await getProductDetails(url);
-          
-          // If we got here, we have product details, so extract the product ID
-          const productId = productDetails.aliexpress_affiliate_product_query_response?.resp_result?.result?.products?.product?.[0]?.product_id;
-          
-          if (!productId) {
-            console.log('No product ID found in API response');
-            continue; // Try next URL if available
-          }
-          
-          // Now get the affiliate link
-          const affiliateLink = await getAffiliateLink(productId);
-          
-          // Format and send response
-          const response = formatProductResponse(productDetails, affiliateLink);
-          await ctx.deleteMessage(processingMsg.message_id); // Delete "Processing..." message
-          await ctx.replyWithMarkdown(response);
-          return; // Exit after successfully processing a URL
-        } catch (urlError) {
-          console.error(`Error with URL ${url}:`, urlError.message);
-          // Continue to next URL if this one failed
-        }
-      }
-      
-      // If we got here, none of the URLs worked
-      await ctx.deleteMessage(processingMsg.message_id); // Delete "Processing..." message
-      ctx.reply('Sorry, I couldn\'t process any of the AliExpress links in your message. Please try a different link format.');
+      const response = formatProductResponse(productDetails, affiliateLink);
+      ctx.replyWithMarkdown(response);
     } catch (error) {
       console.error('Error processing link:', error);
       ctx.reply('Sorry, there was an error processing this link. Please try another product or try again later.');
