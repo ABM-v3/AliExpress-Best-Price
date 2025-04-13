@@ -1,29 +1,12 @@
 {
-  "name": "telegram-aliexpress-affiliate-bot",
-  "version": "1.0.0",
-  "description": "Telegram bot that generates AliExpress affiliate links",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js",
-    "dev": "cross-env NODE_ENV=development nodemon index.js"
-  },
-  "keywords": [
-    "telegram",
-    "bot",
-    "aliexpress",
-    "affiliate"
-  ],
-  "author": "",
-  "license": "MIT",
   "dependencies": {
+    "express": "^4.18.2",
+    "telegraf": "^4.12.2",
     "axios": "^1.6.2",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "telegraf": "^4.15.0"
-  },
-  "devDependencies": {
-    "cross-env": "^7.0.3",
-    "nodemon": "^3.0.1"
+    "node-cache": "^5.1.2",
+    "limiter": "^2.1.0",
+    "crypto": "^1.0.1"
   },
   "engines": {
     "node": ">=18.x"
