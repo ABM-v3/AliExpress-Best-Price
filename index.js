@@ -70,11 +70,8 @@ function extractProductId(url) {
 // Function to get product details from AliExpress API
 async function getProductDetails(productId) {
   try {
-    console.log(`Getting details for product ID/URL: ${productId}`);
-    
     // For direct product IDs
     if (/^\d+$/.test(productId)) {
-      console.log(`Processing numeric product ID: ${productId}`);
       const timestamp = new Date().toISOString().split('.')[0].replace(/[-:T]/g, '');
       
       const params = {
@@ -90,33 +87,17 @@ async function getProductDetails(productId) {
       // Add signature
       params.sign = signRequest(params, aliExpressConfig.appSecret);
       
-      console.log(`Sending API request for product ID: ${productId}`);
-      const response = await axios.post(aliExpressConfig.apiUrl, null, { 
-        params,
-        timeout: 10000 // 10 second timeout
-      });
-      console.log('API response received');
+      const response = await axios.post(aliExpressConfig.apiUrl, null, { params });
       return response.data;
     } 
     // For short URLs, first resolve the URL
     else {
-      console.log(`Processing URL: ${productId}`);
-      const resolved = await resolveShortUrl(productId);
-      
-      // If resolveShortUrl returned a numeric product ID directly
-      if (/^\d+$/.test(resolved)) {
-        console.log(`Direct product ID extracted: ${resolved}`);
-        return getProductDetails(resolved);
-      } 
-      // If it returned a URL, try to extract product ID
-      else {
-        const resolvedProductId = extractProductId(resolved);
-        if (resolvedProductId && /^\d+$/.test(resolvedProductId)) {
-          console.log(`Product ID extracted from resolved URL: ${resolvedProductId}`);
-          return getProductDetails(resolvedProductId);
-        }
-        throw new Error(`Could not extract product ID from URL: ${resolved}`);
+      const resolvedUrl = await resolveShortUrl(productId);
+      const resolvedProductId = extractProductId(resolvedUrl);
+      if (resolvedProductId) {
+        return getProductDetails(resolvedProductId);
       }
+      throw new Error('Could not extract product ID from URL');
     }
   } catch (error) {
     console.error('Error getting product details:', error.message);
