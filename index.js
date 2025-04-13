@@ -46,98 +46,101 @@ function signRequest(params, secret) {
   return crypto.createHash('md5').update(signStr).digest('hex').toUpperCase();
 }
 
-// Function to extract product ID from AliExpress URL
+// Improved function to extract product ID from AliExpress URL
 function extractProductId(url) {
-  // Handle different URL formats
-  let productId = null;
-  
-  // Format: https://www.aliexpress.com/item/1005006456204259.html
-  if (url.includes('item/')) {
-    const match = url.match(/item\/(\d+)(?:\.html)?/);
-    if (match && match[1]) {
-      productId = match[1];
-    }
-  } 
-  // Format: https://a.aliexpress.com/_m0LrCZV or other short URLs
-  else if (url.includes('aliexpress') && !productId) {
-    // For short URLs, return the whole URL to be resolved later
-    return url;
-  }
-  
-  return productId;
-}
-
-// Function to get product details from AliExpress API
-async function getProductDetails(productId) {
   try {
-    // For direct product IDs
-    if (/^\d+$/.test(productId)) {
-      const timestamp = new Date().toISOString().split('.')[0].replace(/[-:T]/g, '');
-      
-      const params = {
-        app_key: aliExpressConfig.appKey,
-        method: 'aliexpress.affiliate.product.query',
-        sign_method: 'md5',
-        timestamp: timestamp,
-        format: 'json',
-        v: '2.0',
-        product_ids: productId
-      };
-      
-      // Add signature
-      params.sign = signRequest(params, aliExpressConfig.appSecret);
-      
-      const response = await axios.post(aliExpressConfig.apiUrl, null, { params });
-      return response.data;
-    } 
-    // For short URLs, first resolve the URL
-    else {
-      const resolvedUrl = await resolveShortUrl(productId);
-      const resolvedProductId = extractProductId(resolvedUrl);
-      if (resolvedProductId) {
-        return getProductDetails(resolvedProductId);
-      }
-      throw new Error('Could not extract product ID from URL');
+    // Format: https://www.aliexpress.com/item/1005006456204259.html
+    const itemMatch = url.match(/item\/(\d+)(?:\.html)?/);
+    if (itemMatch && itemMatch[1]) {
+      console.log(`Extracted product ID from direct URL: ${itemMatch[1]}`);
+      return itemMatch[1];
     }
+    
+    // For short URLs and other formats
+    return null;
   } catch (error) {
-    console.error('Error getting product details:', error.message);
-    throw error;
+    console.error('Error extracting product ID:', error);
+    return null;
   }
 }
 
-// Function to resolve short URLs
+// Improved function to resolve short URLs
 async function resolveShortUrl(url) {
   try {
     console.log(`Resolving URL: ${url}`);
+    
     const response = await axios.get(url, {
       maxRedirects: 10,
-      validateStatus: null,
-      timeout: 15000, // Increased timeout for network issues
+      validateStatus: function(status) {
+        return status >= 200 && status < 400; // Accept all 2xx and 3xx responses
+      },
+      timeout: 15000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       }
     });
     
-    // Try to get the final URL from various places
-    const finalUrl = response.request.res.responseUrl || // axios standard
-                    response.request._redirectable._currentUrl || // node-fetch style
-                    response.request.path || // another possibility
-                    url; // fallback to original
+    // Get the final URL after redirects
+    let finalUrl = '';
     
-    console.log(`Resolved to: ${finalUrl}`);
+    if (response.request.res && response.request.res.responseUrl) {
+      finalUrl = response.request.res.responseUrl;
+    } else if (response.request._redirectable && response.request._redirectable._currentUrl) {
+      finalUrl = response.request._redirectable._currentUrl;
+    } else if (response.request.path) {
+      // Construct full URL if only path is available
+      const parsedUrl = new URL(url);
+      finalUrl = `${parsedUrl.protocol}//${parsedUrl.host}${response.request.path}`;
+    } else {
+      finalUrl = url;
+    }
     
-    // Try to extract product ID from the URL directly if it contains 'item/'
-    if (finalUrl.includes('item/')) {
-      const match = finalUrl.match(/item\/(\d+)(?:\.html)?/);
-      if (match && match[1]) {
-        console.log(`Extracted product ID: ${match[1]}`);
-        return match[1]; // Return the product ID directly
+    console.log(`Resolved to final URL: ${finalUrl}`);
+    return finalUrl;
+  } catch (error) {
+    console.error('Error resolving short URL:', error);
+    throw new Error(`Failed to resolve URL: ${error.message}`);
+  }
+}
+
+// Improved product details function with better error handling
+async function getProductDetails(url) {
+  try {
+    // First check if the URL contains a direct product ID
+    let productId = extractProductId(url);
+    
+    // If no product ID found directly, try to resolve the URL first
+    if (!productId) {
+      console.log('No direct product ID found, resolving URL...');
+      const resolvedUrl = await resolveShortUrl(url);
+      productId = extractProductId(resolvedUrl);
+      
+      if (!productId) {
+        throw new Error('Could not extract product ID even after resolving URL');
       }
     }
     
-    return finalUrl;
+    console.log(`Getting product details for ID: ${productId}`);
+    const timestamp = new Date().toISOString().split('.')[0].replace(/[-:T]/g, '');
+    
+    const params = {
+      app_key: aliExpressConfig.appKey,
+      method: 'aliexpress.affiliate.product.query',
+      sign_method: 'md5',
+      timestamp: timestamp,
+      format: 'json',
+      v: '2.0',
+      product_ids: productId
+    };
+    
+    // Add signature
+    params.sign = signRequest(params, aliExpressConfig.appSecret);
+    
+    const response = await axios.post(aliExpressConfig.apiUrl, null, { params });
+    console.log('Successfully received product details');
+    return response.data;
   } catch (error) {
-    console.error('Error resolving short URL:', error.message);
+    console.error('Error getting product details:', error.message);
     throw error;
   }
 }
@@ -191,6 +194,42 @@ function formatProductResponse(productDetails, affiliateLink) {
   }
 }
 
+// More robust webhook setup with retry logic
+async function setupWebhook(token, webhookUrl) {
+  const maxRetries = 5;
+  let retries = 0;
+  let success = false;
+  
+  while (retries < maxRetries && !success) {
+    try {
+      console.log(`Setting webhook (attempt ${retries + 1}/${maxRetries}): ${webhookUrl}`);
+      await bot.telegram.setWebhook(webhookUrl, {
+        drop_pending_updates: true,
+        max_connections: 100
+      });
+      success = true;
+      console.log('Webhook successfully set!');
+    } catch (error) {
+      retries++;
+      console.error(`Webhook setup failed (attempt ${retries}/${maxRetries}):`, error.message);
+      
+      if (retries < maxRetries) {
+        // Exponential backoff: wait longer between each retry
+        const waitTime = Math.pow(2, retries) * 1000;
+        console.log(`Retrying in ${waitTime/1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        console.error('All webhook setup attempts failed. Falling back to polling mode.');
+        // Fallback to polling if all webhook attempts fail
+        await bot.launch();
+        console.log('Bot started in polling mode as fallback');
+      }
+    }
+  }
+  
+  return success;
+}
+
 // Bot command handlers
 bot.start((ctx) => {
   ctx.reply('Welcome to AliExpress Affiliate Bot! 🚀\n\nSend me an AliExpress product link, and I\'ll give you the best price with an affiliate link.');
@@ -200,29 +239,42 @@ bot.help((ctx) => {
   ctx.reply('Just send me any AliExpress product link, and I\'ll generate an affiliate link for you with the best price.');
 });
 
-// Handle URLs
+// Handle URLs with improved error handling
 bot.on('text', async (ctx) => {
   const text = ctx.message.text;
   
   // Check if the message contains a URL
   if (text.includes('aliexpress.com') || text.includes('ae.aliexpress.com') || text.includes('a.aliexpress.com')) {
     try {
-      ctx.reply('Processing your link... Please wait.');
+      const processingMsg = await ctx.reply('Processing your link... Please wait.');
       
-      const productId = extractProductId(text);
-      if (!productId) {
-        ctx.reply('Sorry, I couldn\'t recognize this AliExpress link format. Please send a valid product link.');
-        return;
+      console.log(`Processing URL: ${text}`);
+      // Get product details directly passing the URL
+      const productDetails = await getProductDetails(text);
+      
+      // Extract product ID for the affiliate link generation
+      let productId;
+      try {
+        productId = productDetails.aliexpress_affiliate_product_query_response.resp_result.result.products.product[0].product_id;
+      } catch (e) {
+        throw new Error('Failed to extract product ID from API response');
       }
       
-      const productDetails = await getProductDetails(productId);
+      console.log(`Generating affiliate link for product ID: ${productId}`);
       const affiliateLink = await getAffiliateLink(productId);
       
       const response = formatProductResponse(productDetails, affiliateLink);
-      ctx.replyWithMarkdown(response);
+      await ctx.replyWithMarkdown(response);
+      
+      // Delete the "processing" message after we've sent the response
+      try {
+        await ctx.deleteMessage(processingMsg.message_id);
+      } catch (e) {
+        console.log('Could not delete processing message:', e.message);
+      }
     } catch (error) {
       console.error('Error processing link:', error);
-      ctx.reply('Sorry, there was an error processing this link. Please try another product or try again later.');
+      ctx.reply(`Sorry, there was an error processing this link: ${error.message}\n\nPlease try another product or try again later.`);
     }
   } else {
     ctx.reply('Please send me an AliExpress product link.');
@@ -254,16 +306,17 @@ const WEBHOOK_URL = `https://ali-express-best-pricev2.vercel.app/webhook/${proce
 if (process.env.NODE_ENV === 'development') {
   // Use polling for local development
   bot.launch().then(() => {
-    console.log('Bot started in polling mode');
+    console.log('Bot started in polling mode (development)');
   });
 } else {
   // For Vercel production environment
-  bot.telegram.setWebhook(WEBHOOK_URL)
-    .then(() => {
-      console.log('Webhook set:', WEBHOOK_URL);
-    })
-    .catch(err => {
-      console.error('Error setting webhook:', err);
+  setupWebhook(process.env.TELEGRAM_BOT_TOKEN, WEBHOOK_URL)
+    .then(success => {
+      if (success) {
+        console.log('Using webhook mode for production');
+      } else {
+        console.log('Using polling mode as fallback for production');
+      }
     });
   
   // Start Express server for production (Vercel)
