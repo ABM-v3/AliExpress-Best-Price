@@ -7,6 +7,29 @@ const crypto = require('crypto');
 const NodeCache = require('node-cache');
 const { RateLimiter } = require('limiter');
 
+// Add this at the top
+bot.use((ctx, next) => {
+  console.log(`Update received: ${JSON.stringify(ctx.update)}`);
+  return next();
+});
+
+// Wrap handlers in error logging
+bot.on('text', async (ctx) => {
+  try {
+    console.log(`Processing message: ${ctx.message.text}`);
+    // ... existing handler code ...
+  } catch (error) {
+    console.error('Handler error:', error);
+    ctx.reply('An error occurred. Please try again.');
+  }
+});
+
+// Add health check endpoint
+app.get('/health', (req, res) => {
+  console.log('Health check called');
+  res.json({ status: 'ok', time: new Date() });
+});
+
 // Initialize Express
 const app = express();
 app.use(express.json());
