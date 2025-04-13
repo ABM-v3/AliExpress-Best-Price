@@ -210,12 +210,22 @@ bot.on('text', async (ctx) => {
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-// Express route for webhook
+// Express routes
 app.use(express.json());
+
+// Root route - Display a simple status page
+app.get('/', (req, res) => {
+  res.status(200).send('AliExpress Affiliate Bot is running! 🚀');
+});
+
+// Webhook route for Telegram
 app.post(`/webhook/${process.env.TELEGRAM_BOT_TOKEN}`, (req, res) => {
   bot.handleUpdate(req.body);
   res.status(200).send('OK');
 });
+
+// Configure the bot to work with webhooks for Vercel deployment
+const WEBHOOK_URL = `https://ali-express-best-pricev2.vercel.app/webhook/${process.env.TELEGRAM_BOT_TOKEN}`;
 
 // For local development
 if (process.env.NODE_ENV === 'development') {
@@ -224,6 +234,15 @@ if (process.env.NODE_ENV === 'development') {
     console.log('Bot started in polling mode');
   });
 } else {
+  // For Vercel production environment
+  bot.telegram.setWebhook(WEBHOOK_URL)
+    .then(() => {
+      console.log('Webhook set:', WEBHOOK_URL);
+    })
+    .catch(err => {
+      console.error('Error setting webhook:', err);
+    });
+  
   // Start Express server for production (Vercel)
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
